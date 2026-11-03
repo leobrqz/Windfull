@@ -9,7 +9,7 @@ Projeto pessoal para controlar um ar-condicionado Samsung WindFree pelo Android,
 - O host oferece gerenciamento de dispositivos pareados e serviço HTTPS local. Os controles no celular são exibidos conforme as capacidades anunciadas pelo host/aparelho.
 - A bridge Samsung usa OCF/CoAP sobre DTLS e só expõe recursos anunciados pelo dispositivo.
 
-O fluxo DTLS, a leitura de estado e comandos idempotentes de energia, temperatura e ventilação foram confirmados fisicamente no aparelho de teste. O pareamento e controle ponta a ponta pelo Android ainda não foram validados. Neste aparelho, modo e WindFree não têm interface atuadora confirmada e permanecem desativados. Isso não implica compatibilidade com todos os modelos ou firmwares Samsung. Consulte [`server/native/samsung/README.md`](server/native/samsung/README.md) para as limitações conhecidas.
+O fluxo DTLS, a leitura de estado e comandos idempotentes de energia, temperatura, ventilação, modo e WindFree foram confirmados fisicamente no aparelho de teste. O pareamento e controle ponta a ponta pelo Android ainda não foram validados. Isso não implica compatibilidade com todos os modelos ou firmwares Samsung. Consulte [`server/native/samsung/README.md`](server/native/samsung/README.md) para as limitações conhecidas.
 
 ## Estrutura
 
