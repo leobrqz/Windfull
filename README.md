@@ -1,45 +1,85 @@
-# Windfull
+<p align="center">
+  <img src="app/assets/brand/windfull-mark.svg" width="72" height="72" alt="Windfull logo">
+</p>
 
-Controle seu ar-condicionado Samsung WindFree pelo Android, com um host Windows na sua rede local.
+<h1 align="center">Windfull</h1>
 
-O Windfull conecta o celular ao aparelho por meio do computador e oferece controles compatíveis com os recursos do ar-condicionado.
+<p align="center">Control a Samsung WindFree air conditioner from Android through a Windows system-tray host on your local network.</p>
 
-## Controles
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--or--later-3C9827" alt="GNU GPL v3.0 or later"></a>
+  <img src="https://img.shields.io/badge/Android-client-3DDC84?logo=android&amp;logoColor=white" alt="Android client">
+  <img src="https://img.shields.io/badge/Windows-host-0078D4?logo=windows&amp;logoColor=white" alt="Windows host">
+</p>
 
-- Ligar e desligar
-- Ajustar a temperatura
-- Selecionar modo de operação e velocidade de ventilação
-- Ativar ou desativar o WindFree
+## Controls
 
-Os controles disponíveis acompanham os recursos anunciados pelo aparelho.
+- Power on and off
+- Target temperature
+- Operating mode and fan speed
+- WindFree
 
-## Conectar
+Controls are shown according to the capabilities reported by the air conditioner.
 
-1. Inicie o Windfull no computador Windows.
-2. Abra o app Android com o celular e o computador na mesma rede local.
-3. Selecione o computador, confira o código de pareamento e aprove o celular no host.
+## Connect
 
-O pareamento fica salvo para as próximas conexões.
+1. Start the Windfull host on Windows and connect the PC, phone and air conditioner to the same local network.
+2. Open the Android app and select the discovered PC. If discovery is blocked, enter the PC's IPv4 address.
+3. Compare the six-digit code in the app with the code shown on the PC, then approve the phone in the Windows host.
 
-## Compilar
+Pairing is saved for future connections.
 
-Requisitos: Flutter, Rust stable e Visual Studio com o workload **Desktop development with C++**. No Windows, execute na pasta do projeto:
+## How it works
+
+The Android app discovers Windows hosts over UDP and communicates with the host through a local HTTPS API. First-time pairing requires PC approval and a matching six-digit code. The app pins the host's SHA-256 TLS certificate fingerprint and stores its pairing credential in Android secure storage.
+
+The Windows host uses a Rust bridge to communicate with the air conditioner through Samsung OCF over CoAP and DTLS. The bridge discovers device resources at runtime and exposes only the controls the appliance advertises.
+
+The air conditioner must be onboarded in Samsung SmartThings once to provision local OCF access. After that, Windfull communicates with it on the LAN without calling SmartThings cloud APIs.
+
+## Build and develop
+
+Install Flutter 3.44.1 and the Android SDK for the client. Windows builds also require Visual Studio Build Tools with the **Desktop development with C++** workload and Windows SDK, Rust stable for the MSVC target, and Strawberry Perl for the OpenSSL bridge build. The Windows build script detects common Strawberry Perl installations or accepts `-PerlBin`.
+
+Build the Windows package from the repository root:
 
 ```powershell
 .\scripts\build_windows.ps1
-.\scripts\build_android.ps1
 ```
 
-Os artefatos são gravados em `output/`. Consulte [`docs/releasing.md`](docs/releasing.md) para o processo de distribuição.
+The Windows ZIP and checksums are written to `output/windows/`. Android APK packaging and release verification are documented in [`docs/releasing.md`](docs/releasing.md).
 
-## Estrutura
+Run the Android client from `app/`:
 
-| Pasta | Conteúdo |
+```powershell
+flutter pub get
+flutter run
+```
+
+Run the Windows host from source:
+
+```powershell
+cargo build --locked --manifest-path server/native/samsung/Cargo.toml
+cd server
+flutter run -d windows
+```
+
+Run `flutter analyze` and `flutter test` from each of `app/` and `server/`. Run Rust bridge tests with:
+
+```powershell
+cargo test --locked --manifest-path server/native/samsung/Cargo.toml
+```
+
+## Repository
+
+| Path | Purpose |
 | --- | --- |
-| `app/` | Aplicativo Android em Flutter |
-| `server/` | Host Windows e integração com o aparelho |
-| `scripts/` | Scripts de build e verificação |
+| `app/` | Flutter Android client: discovery, pairing, device state and controls |
+| `server/` | Windows tray host, local HTTPS API and device approval |
+| `server/native/samsung/` | Rust OCF/CoAP/DTLS bridge for Samsung air conditioners |
+| `scripts/` | Windows and Android build and verification scripts |
+| `docs/releasing.md` | Release build and verification workflow |
 
-## Licença
+For protocol and device integration details, see [`server/native/samsung/README.md`](server/native/samsung/README.md).
 
-Distribuído sob os termos da [GNU General Public License v3.0 ou posterior](LICENSE).
+Licensed under the [GNU General Public License v3.0 or later](LICENSE).
