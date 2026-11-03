@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import '../appliance/appliance_models.dart';
 import '../appliance/appliance_repository.dart';
 import '../appliance/samsung_ocf_repository.dart';
+import '../energy/energy_tracker.dart';
 import '../network/host_secret_store.dart';
 import '../network/host_settings_store.dart';
 import '../network/server_identity.dart';
@@ -71,6 +72,7 @@ class WindfullHost extends WindfullHostController {
   bool _refreshBusy = false;
   int _reconnectAttempt = 0;
   int _consecutiveApplianceFailures = 0;
+  final EnergyTracker _energyTracker = EnergyTracker();
 
   HostStatus _hostStatus = HostStatus.stopped;
   String? _serverError;
@@ -113,6 +115,15 @@ class WindfullHost extends WindfullHostController {
     applianceConnection: _applianceConnection,
     applianceError: _applianceError,
     appliance: _toUiAppliance(),
+    energyUsage: EnergyUsageState(
+      todayKWh: _energyTracker.todayKWh,
+      hourlyKWh: _energyTracker.hourlyKWh,
+      pricePerKWh: _energyTracker.pricePerKWh,
+      monthlyEstimate: _energyTracker.monthlyEstimate,
+      meterKWh: _energyTracker.meterKWh,
+      lastSampleAt: _energyTracker.lastSampleAt,
+      hasBaseline: _energyTracker.hasBaseline,
+    ),
     pendingPairings: List.unmodifiable(_pendingUiRequests()),
     pairedDevices: List.unmodifiable(
       _pairedRecords.values.map((record) => record.toUiDevice()),
@@ -492,6 +503,8 @@ class WindfullHost extends WindfullHostController {
     _configuredApplianceName = name as String?;
     _configuredAppliancePort = port as int?;
     _selectedApplianceId = values['applianceId'] as String?;
+    _energyTracker.loadFromJson(values['energyTracker']);
+    if (_energyTracker.prepareDay(DateTime.now())) await _persistSettings();
   }
 
   Future<void> _saveApplianceSettings({
@@ -500,16 +513,33 @@ class WindfullHost extends WindfullHostController {
     String? applianceId,
     int? port,
   }) async {
-    await _settingsStore!.write({
-      'applianceHost': host,
-      'applianceName': name,
-      'applianceId': applianceId,
-      'appliancePort': port,
-    });
     _configuredApplianceHost = host;
     _configuredApplianceName = name;
     _selectedApplianceId = applianceId;
     _configuredAppliancePort = port;
+    await _persistSettings();
+  }
+
+  Future<void> _persistSettings() => _settingsStore!.write({
+    'applianceHost': _configuredApplianceHost,
+    'applianceName': _configuredApplianceName,
+    'applianceId': _selectedApplianceId,
+    'appliancePort': _configuredAppliancePort,
+    'energyTracker': _energyTracker.toJson(),
+  });
+
+  @override
+  Future<void> setEnergyPricePerKWh(double price) async {
+    if (!price.isFinite || price <= 0 || price > 100) {
+      throw const HostActionException(
+        'Informe uma tarifa maior que zero e menor que R\$ 100,00 por kWh.',
+        statusCode: HttpStatus.badRequest,
+        code: 'invalid_energy_price',
+      );
+    }
+    _energyTracker.pricePerKWh = price;
+    await _persistSettings();
+    _notifyListeners();
   }
 
   Future<void> _initializeApplianceInBackground() async {
@@ -742,6 +772,10 @@ class WindfullHost extends WindfullHostController {
     final snapshot = await repository.readState();
     _applianceCapabilities = capabilities;
     _applianceSnapshot = snapshot;
+    final energy = snapshot.cumulativeEnergyWh;
+    if (energy != null && _energyTracker.record(energy, DateTime.now())) {
+      await _persistSettings();
+    }
     _applianceConnection = ApplianceConnectionStatus.connected;
     _applianceError = null;
     _consecutiveApplianceFailures = 0;
@@ -1542,6 +1576,15 @@ class WindfullHost extends WindfullHostController {
         'windFree': capabilities?.windFree == true,
       },
       'error': error ?? _applianceError,
+      'energy': {
+        'todayKWh': _energyTracker.todayKWh,
+        'hourlyKWh': _energyTracker.hourlyKWh,
+        'pricePerKWh': _energyTracker.pricePerKWh,
+        'monthlyEstimate': _energyTracker.monthlyEstimate,
+        'meterKWh': _energyTracker.meterKWh,
+        'lastSampleAt': _energyTracker.lastSampleAt?.toIso8601String(),
+        'hasBaseline': _energyTracker.hasBaseline,
+      },
     };
   }
 

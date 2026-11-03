@@ -457,8 +457,6 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
     final telemetry = <Widget>[];
     final ambient = state['ambientTemperature'];
     final humidity = state['humidity'];
-    final watts = state['instantaneousPowerW'];
-    final energyWh = state['cumulativeEnergyWh'];
     if (ambient is num && ambient.toDouble().isFinite) {
       telemetry.add(
         _TelemetryValue(
@@ -474,24 +472,6 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
           icon: Icons.water_drop_outlined,
           label: 'Umidade',
           value: '${humidity.toStringAsFixed(0)}%',
-        ),
-      );
-    }
-    if (watts is num && watts.toDouble().isFinite) {
-      telemetry.add(
-        _TelemetryValue(
-          icon: Icons.bolt_rounded,
-          label: 'Pot\u00eancia',
-          value: '${watts.toStringAsFixed(0)} W',
-        ),
-      );
-    }
-    if (energyWh is num && energyWh.toDouble().isFinite) {
-      telemetry.add(
-        _TelemetryValue(
-          icon: Icons.electric_bolt_rounded,
-          label: 'Consumo total',
-          value: '${(energyWh / 1000).toStringAsFixed(2)} kWh',
         ),
       );
     }
@@ -1204,7 +1184,7 @@ class _TelemetryPanel extends StatelessWidget {
             ),
             SizedBox(width: 7),
             Text(
-              'Ambiente e consumo',
+              'Ambiente',
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
             ),
           ],

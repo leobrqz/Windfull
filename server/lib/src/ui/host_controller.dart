@@ -16,6 +16,7 @@ abstract class WindfullHostController extends ChangeNotifier {
   Future<void> setOperatingMode(String mode);
   Future<void> setFanSpeed(String speed);
   Future<void> setFeature(String featureId, bool enabled);
+  Future<void> setEnergyPricePerKWh(double price);
   Future<void> approvePairingRequest(String requestId);
   Future<void> rejectPairingRequest(String requestId);
   Future<void> revokePairedDevice(String deviceId);
@@ -42,6 +43,7 @@ class HostViewState {
     this.applianceConnection = ApplianceConnectionStatus.unknown,
     this.applianceError,
     this.appliance,
+    this.energyUsage = const EnergyUsageState(),
     this.pendingPairings = const [],
     this.pairedDevices = const [],
     this.busyActions = const {},
@@ -60,9 +62,31 @@ class HostViewState {
   final ApplianceConnectionStatus applianceConnection;
   final String? applianceError;
   final ApplianceState? appliance;
+  final EnergyUsageState energyUsage;
   final List<PendingPairingRequest> pendingPairings;
   final List<PairedDevice> pairedDevices;
   final Set<String> busyActions;
+}
+
+@immutable
+class EnergyUsageState {
+  const EnergyUsageState({
+    this.todayKWh = 0,
+    this.hourlyKWh = const [],
+    this.pricePerKWh = 0.95,
+    this.monthlyEstimate = 0,
+    this.meterKWh,
+    this.lastSampleAt,
+    this.hasBaseline = false,
+  });
+
+  final double todayKWh;
+  final List<double> hourlyKWh;
+  final double pricePerKWh;
+  final double monthlyEstimate;
+  final double? meterKWh;
+  final DateTime? lastSampleAt;
+  final bool hasBaseline;
 }
 
 @immutable

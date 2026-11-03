@@ -185,6 +185,9 @@ class TestHostController extends WindfullHostController {
   Future<void> setFeature(String featureId, bool enabled) async {}
 
   @override
+  Future<void> setEnergyPricePerKWh(double price) async {}
+
+  @override
   Future<void> approvePairingRequest(String requestId) async {
     approvedRequestId = requestId;
   }

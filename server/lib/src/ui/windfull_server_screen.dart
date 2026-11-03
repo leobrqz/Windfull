@@ -115,7 +115,7 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
           onPressed: () => setState(() => _settingsOpen = false),
         ),
         title: 'Ajustes',
-        subtitle: 'Dispositivos e rede local',
+        subtitle: 'Dispositivos, rede e energia',
         trailing: _HeaderButton(
           icon: Icons.close_rounded,
           tooltip: 'Fechar painel',
@@ -221,17 +221,6 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
         _MetricChip(
           icon: Icons.water_drop_outlined,
           label: 'UR ${appliance!.humidity!.toStringAsFixed(0)}%',
-        ),
-      if (appliance?.instantaneousPowerW != null)
-        _MetricChip(
-          icon: Icons.bolt_rounded,
-          label: 'Pot. ${appliance!.instantaneousPowerW!.toStringAsFixed(0)} W',
-        ),
-      if (appliance?.cumulativeEnergyWh != null)
-        _MetricChip(
-          icon: Icons.electric_bolt_rounded,
-          label:
-              'Total ${(appliance!.cumulativeEnergyWh! / 1000).toStringAsFixed(2).replaceAll('.', ',')} kWh',
         ),
     ];
 
@@ -573,13 +562,14 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
           ),
           child: Row(
             children: [
-              for (var index = 0; index < 3; index++)
+              for (var index = 0; index < 4; index++)
                 Expanded(
                   child: _TabButton(
                     label: switch (index) {
                       0 => 'Aparelho',
                       1 => 'Celulares',
-                      _ => 'Rede',
+                      2 => 'Rede',
+                      _ => 'Energia',
                     },
                     selected: _settingsTab == index,
                     onPressed: () => setState(() => _settingsTab = index),
@@ -595,12 +585,26 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
           child: switch (_settingsTab) {
             0 => _applianceSettings(state),
             1 => _pairingSettings(state),
-            _ => _networkSettings(state),
+            2 => _networkSettings(state),
+            _ => _energySettings(state),
           },
         ),
       ),
     ],
   );
+
+  Widget _energySettings(HostViewState state) =>
+      _EnergySettingsPanel(usage: state.energyUsage, onSave: _saveEnergyPrice);
+
+  Future<void> _saveEnergyPrice(double price) async {
+    try {
+      await widget.controller.setEnergyPricePerKWh(price);
+      _showMessage('Tarifa de energia salva.');
+    } catch (error) {
+      _showMessage(_friendlyError(error));
+      rethrow;
+    }
+  }
 
   Widget _applianceSettings(HostViewState state) {
     final canSearch =
@@ -990,6 +994,393 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 }
+
+class _EnergySettingsPanel extends StatefulWidget {
+  const _EnergySettingsPanel({required this.usage, required this.onSave});
+
+  final EnergyUsageState usage;
+  final Future<void> Function(double price) onSave;
+
+  @override
+  State<_EnergySettingsPanel> createState() => _EnergySettingsPanelState();
+}
+
+class _EnergySettingsPanelState extends State<_EnergySettingsPanel> {
+  late final TextEditingController _priceController;
+  final _priceFocus = FocusNode();
+  var _saving = false;
+  String? _validationMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _priceController = TextEditingController(
+      text: _formatEnergyRate(widget.usage.pricePerKWh),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _EnergySettingsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.usage.pricePerKWh != widget.usage.pricePerKWh &&
+        !_priceFocus.hasFocus) {
+      _priceController.text = _formatEnergyRate(widget.usage.pricePerKWh);
+    }
+  }
+
+  @override
+  void dispose() {
+    _priceController.dispose();
+    _priceFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final price = double.tryParse(
+      _priceController.text.trim().replaceAll(',', '.'),
+    );
+    if (price == null || !price.isFinite || price <= 0 || price > 100) {
+      setState(() {
+        _validationMessage = 'Informe um valor entre R\$ 0,01 e R\$ 100,00.';
+      });
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _validationMessage = null;
+    });
+    try {
+      await widget.onSave(price);
+    } catch (_) {
+      // The host screen reports the persistence error in its snackbar.
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      _EnergyOverviewCard(usage: widget.usage),
+      const SizedBox(height: 11),
+      _HourlyEnergyCard(usage: widget.usage),
+      const SizedBox(height: 11),
+      _DarkSurface(
+        padding: const EdgeInsets.all(13),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _SectionLabel(title: 'Tarifa de energia'),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _priceController,
+                    focusNode: _priceFocus,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _save(),
+                    onChanged: (_) {
+                      if (_validationMessage != null) {
+                        setState(() => _validationMessage = null);
+                      }
+                    },
+                    style: const TextStyle(
+                      color: WindfullTheme.text,
+                      fontSize: 12,
+                    ),
+                    decoration: const InputDecoration(
+                      prefixText: 'R\$ ',
+                      suffixText: '/ kWh',
+                      hintText: '0,95',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox.square(
+                          dimension: 13,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.check_rounded, size: 15),
+                  label: const Text('Salvar'),
+                ),
+              ],
+            ),
+            if (_validationMessage != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                _validationMessage!,
+                style: const TextStyle(
+                  color: WindfullTheme.warning,
+                  fontSize: 10,
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            const Text(
+              'A projeção mensal usa o consumo de hoje multiplicado por 30.',
+              style: TextStyle(
+                color: WindfullTheme.muted,
+                fontSize: 10,
+                height: 1.35,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 9),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.info_outline_rounded,
+            color: WindfullTheme.muted,
+            size: 14,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              widget.usage.hasBaseline
+                  ? 'O histórico começa na primeira leitura recebida pelo WindFull; o aparelho não fornece dados anteriores.'
+                  : 'Aguardando uma leitura do medidor de energia do aparelho para iniciar o histórico.',
+              style: const TextStyle(
+                color: WindfullTheme.muted,
+                fontSize: 10,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+class _EnergyOverviewCard extends StatelessWidget {
+  const _EnergyOverviewCard({required this.usage});
+
+  final EnergyUsageState usage;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasData = usage.hasBaseline;
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF233332), WindfullTheme.surface],
+        ),
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: WindfullTheme.accent.withValues(alpha: .12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.electric_bolt_rounded,
+                color: WindfullTheme.accent,
+                size: 17,
+              ),
+              const SizedBox(width: 7),
+              const Expanded(
+                child: Text(
+                  'CONSUMO DE HOJE',
+                  style: TextStyle(
+                    color: WindfullTheme.muted,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .8,
+                  ),
+                ),
+              ),
+              if (usage.lastSampleAt != null)
+                Text(
+                  'Atualizado ${_formatSampleTime(usage.lastSampleAt!)}',
+                  style: const TextStyle(
+                    color: WindfullTheme.muted,
+                    fontSize: 9,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                hasData ? _formatEnergy(usage.todayKWh) : '—',
+                style: const TextStyle(
+                  color: WindfullTheme.text,
+                  fontSize: 31,
+                  height: 1,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -.8,
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(left: 6, bottom: 3),
+                child: Text(
+                  'kWh',
+                  style: TextStyle(color: WindfullTheme.muted, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(height: 1, color: WindfullTheme.border),
+          const SizedBox(height: 11),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Estimativa mensal',
+                  style: TextStyle(color: WindfullTheme.muted, fontSize: 10),
+                ),
+              ),
+              Text(
+                hasData ? '${_formatCurrency(usage.monthlyEstimate)}/mês' : '—',
+                style: const TextStyle(
+                  color: WindfullTheme.accent,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          if (usage.meterKWh != null) ...[
+            const SizedBox(height: 7),
+            Text(
+              'Medidor acumulado  ${_formatEnergy(usage.meterKWh!)} kWh',
+              style: const TextStyle(color: WindfullTheme.muted, fontSize: 9),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HourlyEnergyCard extends StatelessWidget {
+  const _HourlyEnergyCard({required this.usage});
+
+  final EnergyUsageState usage;
+
+  @override
+  Widget build(BuildContext context) {
+    final values = List<double>.generate(
+      24,
+      (hour) => hour < usage.hourlyKWh.length ? usage.hourlyKWh[hour] : 0,
+      growable: false,
+    );
+    final maximum = values.fold<double>(0, math.max);
+    return _DarkSurface(
+      padding: const EdgeInsets.fromLTRB(13, 12, 13, 11),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Consumo por hora',
+            style: TextStyle(
+              color: WindfullTheme.text,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 2),
+          const Text(
+            'kWh registrados hoje',
+            style: TextStyle(color: WindfullTheme.muted, fontSize: 9),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 78,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (var hour = 0; hour < values.length; hour++)
+                  Expanded(
+                    child: Tooltip(
+                      message:
+                          '${hour.toString().padLeft(2, '0')}:00 · ${_formatEnergy(values[hour])} kWh',
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 1.2),
+                        child: Align(
+                          alignment: Alignment.bottomCenter,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 240),
+                            curve: Curves.easeOutCubic,
+                            height: maximum == 0
+                                ? 3
+                                : math.max(3, values[hour] / maximum * 74),
+                            decoration: BoxDecoration(
+                              color: values[hour] == 0
+                                  ? WindfullTheme.rail
+                                  : WindfullTheme.accent.withValues(
+                                      alpha: .42 + .58 * values[hour] / maximum,
+                                    ),
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 5),
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _ChartHourLabel('00h'),
+              _ChartHourLabel('06h'),
+              _ChartHourLabel('12h'),
+              _ChartHourLabel('18h'),
+              _ChartHourLabel('23h'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartHourLabel extends StatelessWidget {
+  const _ChartHourLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    label,
+    style: const TextStyle(color: WindfullTheme.muted, fontSize: 8),
+  );
+}
+
+String _formatEnergy(double value) =>
+    value.toStringAsFixed(2).replaceAll('.', ',');
+
+String _formatEnergyRate(double value) =>
+    value.toStringAsFixed(2).replaceAll('.', ',');
+
+String _formatCurrency(double value) =>
+    'R\$ ${value.toStringAsFixed(2).replaceAll('.', ',')}';
+
+String _formatSampleTime(DateTime value) =>
+    '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
 
 class _PanelHeader extends StatelessWidget {
   const _PanelHeader({
