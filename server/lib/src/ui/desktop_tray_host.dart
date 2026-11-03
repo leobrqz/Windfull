@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -74,7 +75,7 @@ class _WindfullDesktopHostState extends State<WindfullDesktopHost>
         items: [
           MenuItem(key: 'show_window', label: 'Abrir Windfull'),
           MenuItem.separator(),
-          MenuItem(key: 'exit_app', label: 'Sair'),
+          MenuItem(key: 'exit_app', label: 'Sair do Windfull'),
         ],
       ),
     );
@@ -197,6 +198,13 @@ class _WindfullDesktopHostState extends State<WindfullDesktopHost>
   @override
   void onTrayIconMouseDown() {
     _toggleWindow();
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    if (Platform.isWindows && _desktopReady && !_exiting) {
+      unawaited(trayManager.popUpContextMenu());
+    }
   }
 
   @override

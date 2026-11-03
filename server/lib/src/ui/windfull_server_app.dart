@@ -17,11 +17,8 @@ class WindfullServerApp extends StatelessWidget {
     theme: WindfullTheme.build(),
     home: WindfullDesktopHost(
       controller: controller,
-      childBuilder: (context, onMinimize, onExit) => WindfullServerScreen(
-        controller: controller,
-        onMinimize: onMinimize,
-        onExit: onExit,
-      ),
+      childBuilder: (context, onMinimize, _) =>
+          WindfullServerScreen(controller: controller, onMinimize: onMinimize),
     ),
   );
 }

@@ -10,13 +10,11 @@ class WindfullServerScreen extends StatefulWidget {
   const WindfullServerScreen({
     required this.controller,
     this.onMinimize,
-    this.onExit,
     super.key,
   });
 
   final WindfullHostController controller;
   final VoidCallback? onMinimize;
-  final VoidCallback? onExit;
 
   @override
   State<WindfullServerScreen> createState() => _WindfullServerScreenState();
@@ -133,6 +131,12 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (state.status == HostStatus.error)
+            _HeaderButton(
+              icon: Icons.refresh_rounded,
+              tooltip: 'Tentar iniciar servidor',
+              onPressed: () => _invoke(widget.controller.retryServer),
+            ),
           _HeaderButton(
             icon: Icons.tune_rounded,
             tooltip: 'Ajustes',
@@ -141,24 +145,23 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
               _settingsTab = 0;
             }),
           ),
-          PopupMenuButton<String>(
-            tooltip: 'Opções',
-            color: WindfullTheme.surface,
-            iconColor: WindfullTheme.muted,
-            onSelected: (value) {
-              if (value == 'hide') widget.onMinimize?.call();
-              if (value == 'exit') widget.onExit?.call();
-              if (value == 'retry') _invoke(widget.controller.retryServer);
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'hide', child: Text('Ocultar')),
-              if (state.status == HostStatus.error)
-                const PopupMenuItem(
-                  value: 'retry',
-                  child: Text('Tentar iniciar servidor'),
-                ),
-              const PopupMenuItem(value: 'exit', child: Text('Sair')),
-            ],
+          TextButton.icon(
+            onPressed: widget.onMinimize,
+            icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 16),
+            label: const Text('Ocultar'),
+            style: TextButton.styleFrom(
+              foregroundColor: WindfullTheme.text,
+              backgroundColor: WindfullTheme.surface,
+              minimumSize: const Size(0, 34),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              textStyle: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(11),
+              ),
+            ),
           ),
         ],
       ),
@@ -174,8 +177,23 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
     final minTemp = appliance?.minimumTemperature;
     final maxTemp = appliance?.maximumTemperature;
     final step = appliance?.temperatureStep;
+    final normalizedMode = appliance?.mode?.toLowerCase().replaceAll(
+      RegExp(r'[^a-z]'),
+      '',
+    );
+    final purifierMode = const {
+      'purify',
+      'purifier',
+      'airpurify',
+      'airpurifier',
+      'purification',
+      'airpurification',
+    }.contains(normalizedMode);
+    final fanOnlyMode =
+        purifierMode || const {'fan', 'wind'}.contains(normalizedMode);
     final canSetTemperature =
         connected &&
+        !fanOnlyMode &&
         temp != null &&
         minTemp != null &&
         maxTemp != null &&
@@ -293,36 +311,18 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
               ),
               const Spacer(),
               if (windFree != null)
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.air_rounded,
-                      size: 13,
-                      color: WindfullTheme.muted,
+                _WindFreeButton(
+                  enabled:
+                      connected &&
+                      (appliance.isPoweredOn ?? false) &&
+                      !state.busyActions.contains('windFree'),
+                  value: windFree.enabled,
+                  onPressed: () => _invoke(
+                    () => widget.controller.setFeature(
+                      'windFree',
+                      !windFree.enabled,
                     ),
-                    const SizedBox(width: 3),
-                    const Text(
-                      'WindFree',
-                      style: TextStyle(color: WindfullTheme.text, fontSize: 11),
-                    ),
-                    const SizedBox(width: 3),
-                    Switch.adaptive(
-                      value: windFree.enabled,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      onChanged:
-                          connected &&
-                              (appliance.isPoweredOn ?? false) &&
-                              !state.busyActions.contains('windFree')
-                          ? (value) => _invoke(
-                              () => widget.controller.setFeature(
-                                'windFree',
-                                value,
-                              ),
-                            )
-                          : null,
-                    ),
-                  ],
+                  ),
                 ),
             ],
           ),
@@ -412,7 +412,19 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
                 ),
               ],
             ),
-          ] else if (!connected)
+          ] else if (connected && fanOnlyMode)
+            Padding(
+              padding: const EdgeInsets.only(top: 5, bottom: 3),
+              child: Text(
+                'Ajuste indisponível no modo ${purifierMode ? 'Purificar' : 'Ventilar'}.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: WindfullTheme.muted,
+                  fontSize: 10,
+                ),
+              ),
+            )
+          else if (!connected)
             Padding(
               padding: const EdgeInsets.only(top: 2, bottom: 8),
               child: Text(
@@ -1051,6 +1063,40 @@ class _PowerButton extends StatelessWidget {
   );
 }
 
+class _WindFreeButton extends StatelessWidget {
+  const _WindFreeButton({
+    required this.value,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final bool value;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: value ? 'Desativar WindFree' : 'Ativar WindFree',
+    child: TextButton.icon(
+      onPressed: enabled ? onPressed : null,
+      icon: Icon(Icons.air_rounded, size: 14),
+      label: Text(value ? 'WindFree · Ligado' : 'WindFree · Desligado'),
+      style: TextButton.styleFrom(
+        backgroundColor: value
+            ? WindfullTheme.accent.withValues(alpha: .13)
+            : WindfullTheme.surface,
+        foregroundColor: value ? WindfullTheme.accent : WindfullTheme.muted,
+        disabledForegroundColor: WindfullTheme.disabled,
+        minimumSize: const Size(0, 34),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+  );
+}
+
 class _AirConditionerIllustration extends StatelessWidget {
   const _AirConditionerIllustration();
 
@@ -1222,135 +1268,62 @@ class _OptionPicker extends StatelessWidget {
   );
 
   Future<void> _selectOption(BuildContext context) async {
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: .56),
-      builder: (context) => _OptionSelectionSheet(
-        icon: icon,
-        title: title,
-        value: value,
-        options: options,
+    final anchor = context.findRenderObject();
+    final overlay = Overlay.of(context).context.findRenderObject();
+    if (anchor is! RenderBox || overlay is! RenderBox) return;
+    final anchorRect = Rect.fromPoints(
+      anchor.localToGlobal(Offset.zero, ancestor: overlay),
+      anchor.localToGlobal(
+        anchor.size.bottomRight(Offset.zero),
+        ancestor: overlay,
       ),
     );
-    if (selected != null) onChanged(selected);
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(anchorRect, Offset.zero & overlay.size),
+      color: WindfullTheme.surfaceRaised,
+      elevation: 16,
+      constraints: BoxConstraints(
+        minWidth: anchor.size.width,
+        maxWidth: overlay.size.width - 24,
+        maxHeight: overlay.size.height - 24,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      items: [
+        for (final option in options)
+          PopupMenuItem<String>(
+            value: option,
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _formatOption(option),
+                    style: TextStyle(
+                      color: option == value
+                          ? WindfullTheme.accent
+                          : WindfullTheme.text,
+                      fontSize: 12,
+                      fontWeight: option == value
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                    ),
+                  ),
+                ),
+                if (option == value)
+                  const Icon(
+                    Icons.check_rounded,
+                    color: WindfullTheme.accent,
+                    size: 16,
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+    if (selected != null && selected != value) onChanged(selected);
   }
-}
-
-class _OptionSelectionSheet extends StatelessWidget {
-  const _OptionSelectionSheet({
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.options,
-  });
-
-  final IconData icon;
-  final String title;
-  final String? value;
-  final List<String> options;
-
-  @override
-  Widget build(BuildContext context) => SafeArea(
-    top: false,
-    child: Container(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-      decoration: const BoxDecoration(
-        color: WindfullTheme.surfaceRaised,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x66000000),
-            blurRadius: 28,
-            offset: Offset(0, -8),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Container(
-              width: 34,
-              height: 4,
-              decoration: BoxDecoration(
-                color: WindfullTheme.muted.withValues(alpha: .35),
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Icon(icon, color: WindfullTheme.accent, size: 18),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(
-                    color: WindfullTheme.text,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close_rounded, size: 18),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          for (final option in options)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 3),
-              child: Material(
-                color: option == value
-                    ? WindfullTheme.accent.withValues(alpha: .11)
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(12),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: () => Navigator.pop(context, option),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 11,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            _formatOption(option),
-                            style: TextStyle(
-                              color: option == value
-                                  ? WindfullTheme.accent
-                                  : WindfullTheme.text,
-                              fontSize: 12,
-                              fontWeight: option == value
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                          ),
-                        ),
-                        if (option == value)
-                          const Icon(
-                            Icons.check_rounded,
-                            color: WindfullTheme.accent,
-                            size: 17,
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    ),
-  );
 }
 
 class _FeatureRow extends StatelessWidget {
@@ -1756,6 +1729,15 @@ String _formatOption(String option) => switch (option.toLowerCase()) {
   'cool' => 'Resfriar',
   'dry' => 'Desumidificar',
   'fan' || 'wind' => 'Ventilar',
+  'purify' ||
+  'purifier' ||
+  'air_purify' ||
+  'air_purifier' ||
+  'airpurify' ||
+  'airpurifier' ||
+  'purification' ||
+  'air_purification' ||
+  'airpurification' => 'Purificar',
   'heat' => 'Aquecer',
   'low' => 'Baixa',
   'medium' => 'Média',

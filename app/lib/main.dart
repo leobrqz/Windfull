@@ -435,6 +435,20 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
     final result = <Widget>[];
     final state = _deviceState;
     final caps = _capabilities;
+    final mode = state['mode']?.toString();
+    final normalizedMode = mode?.toLowerCase().replaceAll(
+      RegExp(r'[^a-z]'),
+      '',
+    );
+    final purifierMode = const {
+      'purify',
+      'purifier',
+      'airpurify',
+      'airpurifier',
+      'purification',
+    }.contains(normalizedMode);
+    final fanOnlyMode =
+        purifierMode || const {'fan', 'wind'}.contains(normalizedMode);
     void add(Widget widget) {
       if (result.isNotEmpty) result.add(const SizedBox(height: 10));
       result.add(widget);
@@ -488,26 +502,32 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
           _ControlTile(
             icon: Icons.device_thermostat_rounded,
             title: 'Temperatura',
-            subtitle: current == null
+            subtitle: fanOnlyMode
+                ? 'Indisponível no modo ${purifierMode ? 'Purificar' : 'Ventilar'}'
+                : current == null
                 ? 'Estado desconhecido - ${min.toStringAsFixed(0)}-${max.toStringAsFixed(0)} \u00b0C'
                 : '${current.toStringAsFixed(1).replaceAll('.0', '')} \u00b0C${state['ambientTemperature'] is num && (state['ambientTemperature'] as num).toDouble().isFinite ? ' - ambiente ${(state['ambientTemperature'] as num).toStringAsFixed(1)} \u00b0C' : ''}',
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  onPressed: _online && current != null && current - step >= min
-                      ? () => _sendCommand('temperature', current - step)
-                      : null,
-                  icon: const Icon(Icons.remove_circle_outline),
-                ),
-                IconButton(
-                  onPressed: _online && current != null && current + step <= max
-                      ? () => _sendCommand('temperature', current + step)
-                      : null,
-                  icon: const Icon(Icons.add_circle_outline),
-                ),
-              ],
-            ),
+            trailing: fanOnlyMode
+                ? const SizedBox.shrink()
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        onPressed:
+                            _online && current != null && current - step >= min
+                            ? () => _sendCommand('temperature', current - step)
+                            : null,
+                        icon: const Icon(Icons.remove_circle_outline),
+                      ),
+                      IconButton(
+                        onPressed:
+                            _online && current != null && current + step <= max
+                            ? () => _sendCommand('temperature', current + step)
+                            : null,
+                        icon: const Icon(Icons.add_circle_outline),
+                      ),
+                    ],
+                  ),
           ),
         );
       }
@@ -1297,6 +1317,15 @@ String _displayOption(String value) => switch (value.toLowerCase()) {
   'cool' => 'Resfriar',
   'dry' => 'Desumidificar',
   'fan' || 'wind' => 'Ventilar',
+  'purify' ||
+  'purifier' ||
+  'air_purify' ||
+  'air_purifier' ||
+  'airpurify' ||
+  'airpurifier' ||
+  'purification' ||
+  'air_purification' ||
+  'airpurification' => 'Purificar',
   'heat' => 'Aquecer',
   'low' => 'Baixa',
   'medium' => 'Média',
