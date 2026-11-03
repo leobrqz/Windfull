@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'host_controller.dart';
+import 'windfull_brand_mark.dart';
 import 'windfull_theme.dart';
 
 class WindfullServerScreen extends StatefulWidget {
@@ -59,14 +60,17 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
               height: math.min(680, bounds.maxHeight),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: WindfullTheme.canvas,
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF151A1C), WindfullTheme.canvas],
+                  ),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: WindfullTheme.border),
                   boxShadow: const [
                     BoxShadow(
-                      color: Color(0x77000000),
-                      blurRadius: 24,
-                      offset: Offset(0, 12),
+                      color: Color(0x88000000),
+                      blurRadius: 34,
+                      offset: Offset(0, 16),
                     ),
                   ],
                 ),
@@ -123,15 +127,7 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
     }
     final ready = state.status == HostStatus.ready;
     return _PanelHeader(
-      leading: Container(
-        width: 34,
-        height: 34,
-        decoration: BoxDecoration(
-          color: const Color(0xFF243438),
-          borderRadius: BorderRadius.circular(11),
-        ),
-        child: const Icon(Icons.air_rounded, color: WindfullTheme.accent),
-      ),
+      leading: const WindfullBrandMark(size: 36),
       title: 'Windfull',
       subtitle: ready ? 'Controle local' : _serverStatusLabel(state.status),
       trailing: Row(
@@ -523,24 +519,29 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
     key: const ValueKey('settings'),
     children: [
       Padding(
-        padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-        child: Row(
-          children: [
-            for (var index = 0; index < 3; index++) ...[
-              if (index > 0) const SizedBox(width: 6),
-              Expanded(
-                child: _TabButton(
-                  label: switch (index) {
-                    0 => 'Aparelho',
-                    1 => 'Celulares',
-                    _ => 'Rede',
-                  },
-                  selected: _settingsTab == index,
-                  onPressed: () => setState(() => _settingsTab = index),
+        padding: const EdgeInsets.fromLTRB(16, 9, 16, 10),
+        child: Container(
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: WindfullTheme.surface,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              for (var index = 0; index < 3; index++)
+                Expanded(
+                  child: _TabButton(
+                    label: switch (index) {
+                      0 => 'Aparelho',
+                      1 => 'Celulares',
+                      _ => 'Rede',
+                    },
+                    selected: _settingsTab == index,
+                    onPressed: () => setState(() => _settingsTab = index),
+                  ),
                 ),
-              ),
             ],
-          ],
+          ),
         ),
       ),
       Expanded(
@@ -960,8 +961,8 @@ class _PanelHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    height: 62,
-    padding: const EdgeInsets.fromLTRB(15, 7, 9, 7),
+    height: 64,
+    padding: const EdgeInsets.fromLTRB(17, 7, 10, 7),
     decoration: const BoxDecoration(
       border: Border(bottom: BorderSide(color: WindfullTheme.border)),
     ),
@@ -1041,7 +1042,9 @@ class _PowerButton extends StatelessWidget {
             : WindfullTheme.surface,
         foregroundColor: value ? WindfullTheme.accent : WindfullTheme.muted,
         disabledForegroundColor: WindfullTheme.disabled,
-        padding: const EdgeInsets.all(11),
+        padding: const EdgeInsets.all(12),
+        minimumSize: const Size(46, 46),
+        shape: const CircleBorder(),
       ),
       icon: const Icon(Icons.power_settings_new_rounded, size: 18),
     ),
@@ -1053,7 +1056,7 @@ class _AirConditionerIllustration extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    height: 112,
+    height: 104,
     child: CustomPaint(
       painter: _AirConditionerPainter(),
       child: const SizedBox.expand(),
@@ -1160,57 +1163,192 @@ class _OptionPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.fromLTRB(9, 7, 7, 5),
     decoration: BoxDecoration(
       color: WindfullTheme.surface,
-      borderRadius: BorderRadius.circular(11),
-      border: Border.all(color: WindfullTheme.border),
+      borderRadius: BorderRadius.circular(15),
     ),
-    child: Row(
-      children: [
-        Icon(icon, color: WindfullTheme.muted, size: 15),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(color: WindfullTheme.muted, fontSize: 9),
+    child: InkWell(
+      borderRadius: BorderRadius.circular(15),
+      onTap: enabled ? () => _selectOption(context) : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(11, 9, 10, 9),
+        child: Row(
+          children: [
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: WindfullTheme.surfaceRaised,
+                borderRadius: BorderRadius.circular(10),
               ),
-              DropdownButton<String>(
-                value: options.contains(value) ? value : null,
-                hint: Text(
-                  '—',
+              child: Icon(icon, color: WindfullTheme.accent, size: 15),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: WindfullTheme.muted,
+                      fontSize: 10,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    value != null && options.contains(value)
+                        ? _formatOption(value!)
+                        : '—',
+                    style: const TextStyle(
+                      color: WindfullTheme.text,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: WindfullTheme.muted,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Future<void> _selectOption(BuildContext context) async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: .56),
+      builder: (context) => _OptionSelectionSheet(
+        icon: icon,
+        title: title,
+        value: value,
+        options: options,
+      ),
+    );
+    if (selected != null) onChanged(selected);
+  }
+}
+
+class _OptionSelectionSheet extends StatelessWidget {
+  const _OptionSelectionSheet({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.options,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? value;
+  final List<String> options;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    top: false,
+    child: Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+      decoration: const BoxDecoration(
+        color: WindfullTheme.surfaceRaised,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x66000000),
+            blurRadius: 28,
+            offset: Offset(0, -8),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 34,
+              height: 4,
+              decoration: BoxDecoration(
+                color: WindfullTheme.muted.withValues(alpha: .35),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Icon(icon, color: WindfullTheme.accent, size: 18),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  title,
                   style: const TextStyle(
                     color: WindfullTheme.text,
-                    fontSize: 11,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                isExpanded: true,
-                isDense: true,
-                underline: const SizedBox.shrink(),
-                dropdownColor: WindfullTheme.surface,
-                icon: const Icon(Icons.expand_more_rounded, size: 16),
-                style: const TextStyle(color: WindfullTheme.text, fontSize: 11),
-                items: options
-                    .map(
-                      (option) => DropdownMenuItem(
-                        value: option,
-                        child: Text(_formatOption(option)),
-                      ),
-                    )
-                    .toList(growable: false),
-                onChanged: enabled
-                    ? (option) {
-                        if (option != null) onChanged(option);
-                      }
-                    : null,
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close_rounded, size: 18),
               ),
             ],
           ),
-        ),
-      ],
+          const SizedBox(height: 5),
+          for (final option in options)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Material(
+                color: option == value
+                    ? WindfullTheme.accent.withValues(alpha: .11)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => Navigator.pop(context, option),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 11,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _formatOption(option),
+                            style: TextStyle(
+                              color: option == value
+                                  ? WindfullTheme.accent
+                                  : WindfullTheme.text,
+                              fontSize: 12,
+                              fontWeight: option == value
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                        if (option == value)
+                          const Icon(
+                            Icons.check_rounded,
+                            color: WindfullTheme.accent,
+                            size: 17,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     ),
   );
 }
@@ -1290,9 +1428,8 @@ class _InlineNotice extends StatelessWidget {
     margin: const EdgeInsets.only(bottom: 9),
     padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
     decoration: BoxDecoration(
-      color: WindfullTheme.warning.withValues(alpha: .1),
-      borderRadius: BorderRadius.circular(11),
-      border: Border.all(color: WindfullTheme.warning.withValues(alpha: .24)),
+      color: WindfullTheme.warning.withValues(alpha: .09),
+      borderRadius: BorderRadius.circular(14),
     ),
     child: Row(
       children: [
@@ -1321,18 +1458,30 @@ class _TabButton extends StatelessWidget {
   final VoidCallback onPressed;
 
   @override
-  Widget build(BuildContext context) => TextButton(
-    onPressed: onPressed,
-    style: TextButton.styleFrom(
-      backgroundColor: selected
-          ? WindfullTheme.accent.withValues(alpha: .12)
-          : Colors.transparent,
-      foregroundColor: selected ? WindfullTheme.accent : WindfullTheme.muted,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      minimumSize: const Size(0, 32),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+  Widget build(BuildContext context) => AnimatedContainer(
+    duration: const Duration(milliseconds: 180),
+    curve: Curves.easeOutCubic,
+    decoration: BoxDecoration(
+      color: selected ? const Color(0xFF2A383A) : Colors.transparent,
+      borderRadius: BorderRadius.circular(11),
     ),
-    child: Text(label, style: const TextStyle(fontSize: 10)),
+    child: TextButton(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        foregroundColor: selected ? WindfullTheme.accent : WindfullTheme.muted,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        minimumSize: const Size(0, 34),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+        ),
+      ),
+    ),
   );
 }
 
@@ -1378,8 +1527,7 @@ class _DarkSurface extends StatelessWidget {
     padding: padding,
     decoration: BoxDecoration(
       color: WindfullTheme.surface,
-      border: Border.all(color: WindfullTheme.border),
-      borderRadius: BorderRadius.circular(13),
+      borderRadius: BorderRadius.circular(16),
     ),
     child: child,
   );
@@ -1603,15 +1751,27 @@ String _applianceStatusLabel(ApplianceConnectionStatus status) =>
       ApplianceConnectionStatus.error => 'indisponível',
     };
 
-String _formatOption(String option) => option
-    .replaceAll('_', ' ')
-    .split(' ')
-    .map(
-      (word) => word.isEmpty
-          ? word
-          : '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}',
-    )
-    .join(' ');
+String _formatOption(String option) => switch (option.toLowerCase()) {
+  'auto' => 'Automático',
+  'cool' => 'Resfriar',
+  'dry' => 'Desumidificar',
+  'fan' || 'wind' => 'Ventilar',
+  'heat' => 'Aquecer',
+  'low' => 'Baixa',
+  'medium' => 'Média',
+  'high' => 'Alta',
+  'turbo' => 'Turbo',
+  _ =>
+    option
+        .replaceAll('_', ' ')
+        .split(' ')
+        .map(
+          (word) => word.isEmpty
+              ? word
+              : '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}',
+        )
+        .join(' '),
+};
 
 String _formatTemp(double value) =>
     value.toStringAsFixed(value % 1 == 0 ? 0 : 1);

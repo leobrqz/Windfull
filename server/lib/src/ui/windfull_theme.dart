@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 
 abstract final class WindfullTheme {
-  static const canvas = Color(0xFF101518);
-  static const surface = Color(0xFF1A2226);
-  static const rail = Color(0xFF2B3438);
-  static const border = Color(0xFF303A3E);
-  static const text = Color(0xFFE9F0F0);
-  static const muted = Color(0xFF91A0A4);
+  static const canvas = Color(0xFF101416);
+  static const surface = Color(0xFF1A2023);
+  static const surfaceRaised = Color(0xFF222A2D);
+  static const rail = Color(0xFF343E41);
+  static const border = Color(0x20FFFFFF);
+  static const text = Color(0xFFF0F5F4);
+  static const muted = Color(0xFF9BA8AA);
   static const mutedInk = muted;
   static const disabled = Color(0xFF566266);
-  static const accent = Color(0xFF9AD7CF);
+  static const accent = Color(0xFF9FE3D9);
   static const warning = Color(0xFFF0BC70);
   static const danger = Color(0xFFE7978C);
 
@@ -47,21 +48,21 @@ abstract final class WindfullTheme {
     dividerTheme: const DividerThemeData(color: border, thickness: 1),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: canvas,
+      fillColor: surfaceRaised,
       hintStyle: const TextStyle(color: muted, fontSize: 11),
       prefixIconColor: muted,
       contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: border),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: border),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide.none,
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: accent),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: accent, width: 1.2),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
@@ -73,7 +74,7 @@ abstract final class WindfullTheme {
         minimumSize: const Size(0, 34),
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
         textStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
       ),
     ),
     textButtonTheme: TextButtonThemeData(
@@ -96,15 +97,12 @@ abstract final class WindfullTheme {
     popupMenuTheme: PopupMenuThemeData(
       color: surface,
       textStyle: const TextStyle(color: text, fontSize: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: border),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: surface,
       contentTextStyle: const TextStyle(color: text, fontSize: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       behavior: SnackBarBehavior.floating,
     ),
   );

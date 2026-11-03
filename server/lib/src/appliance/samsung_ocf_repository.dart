@@ -55,6 +55,8 @@ class SamsungOcfRepository implements ApplianceRepository {
 
   @override
   Future<ApplianceCapabilities> readCapabilities() async {
+    final cached = _capabilities;
+    if (cached != null) return cached;
     final result = _asObject(await _send('capabilities', const {}));
     _capabilities = _capabilitiesFromJson(result);
     return _capabilities!;

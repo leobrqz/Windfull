@@ -28,7 +28,7 @@ class WindfullHost extends WindfullHostController {
     this._enableDiscovery = true,
     this._autoDiscover = true,
     this._bridgeExecutable,
-    this.applianceRefreshInterval = const Duration(seconds: 10),
+    this.applianceRefreshInterval = const Duration(seconds: 20),
     this.requestBodyTimeout = const Duration(seconds: 10),
   }) : _injectedApplianceRepository = applianceRepository,
        _secretStore = secretStore ?? FlutterHostSecretStore(),
@@ -70,6 +70,7 @@ class WindfullHost extends WindfullHostController {
   bool _discoveryBusy = false;
   bool _refreshBusy = false;
   int _reconnectAttempt = 0;
+  int _consecutiveApplianceFailures = 0;
 
   HostStatus _hostStatus = HostStatus.stopped;
   String? _serverError;
@@ -541,6 +542,10 @@ class WindfullHost extends WindfullHostController {
   Future<void> _monitorAppliance() async {
     if (_isShuttingDown || _refreshBusy || _discoveryBusy) return;
     if (_configuredApplianceHost == null) return;
+    if (_busyActions.contains('appliance.connect') ||
+        _busyActions.contains('appliance.reconnect')) {
+      return;
+    }
     if (_applianceConnection != ApplianceConnectionStatus.connected ||
         _applianceDevice == null) {
       _scheduleReconnect();
@@ -556,9 +561,12 @@ class WindfullHost extends WindfullHostController {
     try {
       await _withApplianceLock(_readApplianceStateLocked);
     } on Object catch (error) {
-      _applianceConnection = ApplianceConnectionStatus.error;
-      _applianceError = _errorMessage(error);
-      _scheduleReconnect();
+      _consecutiveApplianceFailures++;
+      if (_consecutiveApplianceFailures >= 2) {
+        _applianceConnection = ApplianceConnectionStatus.error;
+        _applianceError = _errorMessage(error);
+        _scheduleReconnect();
+      }
     } finally {
       _busyActions.remove('appliance.refresh');
       _refreshBusy = false;
@@ -600,8 +608,6 @@ class WindfullHost extends WindfullHostController {
     final repository = _applianceRepository;
     if (repository == null) return;
     _busyActions.add('appliance.reconnect');
-    _applianceConnection = ApplianceConnectionStatus.disconnected;
-    _applianceError = null;
     _notifyListeners();
     try {
       await _withApplianceLock(() async {
@@ -738,6 +744,7 @@ class WindfullHost extends WindfullHostController {
     _applianceSnapshot = snapshot;
     _applianceConnection = ApplianceConnectionStatus.connected;
     _applianceError = null;
+    _consecutiveApplianceFailures = 0;
   }
 
   Future<void> _runApplianceCommand({
@@ -770,12 +777,20 @@ class WindfullHost extends WindfullHostController {
         _applianceSnapshot = await operation(repository);
         _applianceConnection = ApplianceConnectionStatus.connected;
         _applianceError = null;
+        _consecutiveApplianceFailures = 0;
       });
     } on Object catch (error) {
-      _applianceError = _errorMessage(error);
       if (error is ApplianceException) {
-        _applianceConnection = ApplianceConnectionStatus.error;
-        _scheduleReconnect();
+        _consecutiveApplianceFailures++;
+        if (_consecutiveApplianceFailures >= 2) {
+          _applianceConnection = ApplianceConnectionStatus.error;
+          _applianceError = _errorMessage(error);
+          _scheduleReconnect();
+        } else {
+          _applianceError = null;
+        }
+      } else {
+        _applianceError = _errorMessage(error);
       }
       _notifyListeners();
       rethrow;
@@ -1225,33 +1240,21 @@ class WindfullHost extends WindfullHostController {
   }
 
   Future<void> _handleState(HttpRequest request) async {
-    try {
-      final repository = _applianceRepository;
-      if (repository == null || _applianceDevice == null) {
-        await _writeJson(
-          request.response,
-          HttpStatus.ok,
-          _apiState(connected: false, error: _applianceError),
-        );
-        return;
-      }
-      await _withApplianceLock(() async => _readApplianceStateLocked());
-      await _writeJson(
-        request.response,
-        HttpStatus.ok,
-        _apiState(connected: true),
-      );
-    } on Object catch (error) {
-      _applianceConnection = ApplianceConnectionStatus.error;
-      _applianceError = _errorMessage(error);
-      _scheduleReconnect();
-      _notifyListeners();
-      await _writeJson(
-        request.response,
-        HttpStatus.ok,
-        _apiState(connected: false, error: _applianceError),
-      );
-    }
+    // Android polls frequently so its controls stay responsive. Serve the most
+    // recent snapshot instead of issuing an OCF/DTLS exchange for every poll;
+    // the host monitor refreshes this cache independently.
+    final connected =
+        _applianceRepository != null &&
+        _applianceDevice != null &&
+        _applianceConnection == ApplianceConnectionStatus.connected;
+    await _writeJson(
+      request.response,
+      HttpStatus.ok,
+      _apiState(
+        connected: connected,
+        error: connected ? null : _applianceError,
+      ),
+    );
   }
 
   Future<void> _handleCommand(HttpRequest request) async {

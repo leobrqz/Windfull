@@ -6,6 +6,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'data/pairing_store.dart';
 import 'data/pairing_client_name.dart';
 import 'data/windfull_client.dart';
+import 'ui/windfull_brand_mark.dart';
+import 'ui/windfull_palette.dart';
 
 void main() => runApp(const WindfullApp());
 
@@ -14,20 +16,99 @@ class WindfullApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Windfull',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xff087f72),
-            brightness: Brightness.light,
-            surface: const Color(0xfff5f7f6),
-          ),
-          scaffoldBackgroundColor: const Color(0xfff5f7f6),
-          fontFamily: 'Roboto',
+    title: 'Windfull',
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.dark,
+      colorScheme: const ColorScheme.dark(
+        primary: WindfullPalette.accent,
+        onPrimary: WindfullPalette.canvas,
+        secondary: WindfullPalette.accent,
+        onSecondary: WindfullPalette.canvas,
+        surface: WindfullPalette.surface,
+        onSurface: WindfullPalette.text,
+        error: Color(0xFFE7978C),
+        onError: WindfullPalette.canvas,
+      ),
+      scaffoldBackgroundColor: WindfullPalette.canvas,
+      textTheme: const TextTheme(
+        bodyLarge: TextStyle(color: WindfullPalette.text),
+        bodyMedium: TextStyle(color: WindfullPalette.muted),
+        bodySmall: TextStyle(color: WindfullPalette.muted),
+        titleLarge: TextStyle(color: WindfullPalette.text),
+        titleMedium: TextStyle(color: WindfullPalette.text),
+      ),
+      iconTheme: const IconThemeData(color: WindfullPalette.muted),
+      dividerTheme: const DividerThemeData(color: WindfullPalette.border),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: WindfullPalette.raised,
+        hintStyle: const TextStyle(color: WindfullPalette.muted),
+        prefixIconColor: WindfullPalette.muted,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide.none,
         ),
-        home: const RemoteHomePage(),
-      );
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: WindfullPalette.accent),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: WindfullPalette.accent,
+          foregroundColor: WindfullPalette.canvas,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: WindfullPalette.accent),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? WindfullPalette.canvas
+              : WindfullPalette.muted,
+        ),
+        trackColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? WindfullPalette.accent
+              : WindfullPalette.raised,
+        ),
+      ),
+      dialogTheme: const DialogThemeData(
+        backgroundColor: WindfullPalette.surface,
+        surfaceTintColor: Colors.transparent,
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: WindfullPalette.surface,
+        surfaceTintColor: Colors.transparent,
+        showDragHandle: true,
+        dragHandleColor: WindfullPalette.muted,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: WindfullPalette.raised,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: WindfullPalette.raised,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+    ),
+    home: const RemoteHomePage(),
+  );
 }
 
 class RemoteHomePage extends StatefulWidget {
@@ -48,6 +129,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
   bool _busy = false;
   bool _refreshing = false;
   DateTime _lastRediscovery = DateTime.fromMillisecondsSinceEpoch(0);
+  int _consecutiveServerFailures = 0;
   Timer? _pollTimer;
 
   @override
@@ -55,7 +137,10 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
     super.initState();
     _restore();
     _discover();
-    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refreshState());
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 4),
+      (_) => _refreshState(),
+    );
   }
 
   @override
@@ -81,6 +166,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         _snapshot = value;
         _connectionError = null;
         _deviceError = value['error'] as String?;
+        _consecutiveServerFailures = 0;
       });
     } on WindfullUnauthorizedException catch (error) {
       await _pairingStore.clear();
@@ -92,14 +178,17 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         _deviceError = null;
       });
     } on Object {
+      _consecutiveServerFailures++;
+      if (_consecutiveServerFailures < 2) return;
       if (mounted) {
         setState(() {
-          _snapshot = null;
-          _connectionError = 'Servidor sem resposta. Tentando localizar novamente...';
+          _connectionError =
+              'Servidor sem resposta. Tentando localizar novamente...';
           _deviceError = null;
         });
       }
-      if (DateTime.now().difference(_lastRediscovery) >= const Duration(seconds: 10)) {
+      if (DateTime.now().difference(_lastRediscovery) >=
+          const Duration(seconds: 10)) {
         _lastRediscovery = DateTime.now();
         DiscoveredServer? moved;
         try {
@@ -107,7 +196,8 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         } on Object {
           // Keep controls disabled and retry after the rediscovery interval.
         }
-        if (moved != null && (moved.host != credential.host || moved.port != credential.port)) {
+        if (moved != null &&
+            (moved.host != credential.host || moved.port != credential.port)) {
           final updated = PairingCredential(
             serverId: credential.serverId,
             host: moved.host,
@@ -142,13 +232,21 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
       if (!mounted) return;
       final saved = _credential;
       setState(() {
-        _servers = servers.where((server) =>
-            saved == null || server.id != saved.serverId || server.fingerprint == saved.fingerprint).toList();
+        _servers = servers
+            .where(
+              (server) =>
+                  saved == null ||
+                  server.id != saved.serverId ||
+                  server.fingerprint == saved.fingerprint,
+            )
+            .toList();
       });
       if (servers.isEmpty) {
         if (_credential == null) {
-          setState(() => _connectionError =
-              'Nenhum computador encontrado nesta rede. Confira se o Windfull est\u00e1 aberto no PC.');
+          setState(
+            () => _connectionError =
+                'Nenhum computador encontrado nesta rede. Confira se o Windfull est\u00e1 aberto no PC.',
+          );
         }
         return;
       }
@@ -176,9 +274,16 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
           ? null
           : _client.matchPinnedServer(_credential!, servers);
       final saved = _credential;
-      final visible = servers.where((server) =>
-          saved == null || server.id != saved.serverId || server.fingerprint == saved.fingerprint).toList();
-      if (pinned != null && saved != null &&
+      final visible = servers
+          .where(
+            (server) =>
+                saved == null ||
+                server.id != saved.serverId ||
+                server.fingerprint == saved.fingerprint,
+          )
+          .toList();
+      if (pinned != null &&
+          saved != null &&
           (pinned.host != saved.host || pinned.port != saved.port)) {
         final moved = PairingCredential(
           serverId: saved.serverId,
@@ -196,8 +301,8 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         _servers = visible;
         _connectionError = visible.isEmpty
             ? servers.isEmpty
-                ? 'Nenhum Windfull respondeu em $ip na porta ${WindfullClient.discoveryPort}.'
-                : 'A identidade do servidor mudou. O fingerprint salvo n\u00e3o confere; n\u00e3o pareie antes de verificar o PC.'
+                  ? 'Nenhum Windfull respondeu em $ip na porta ${WindfullClient.discoveryPort}.'
+                  : 'A identidade do servidor mudou. O fingerprint salvo n\u00e3o confere; n\u00e3o pareie antes de verificar o PC.'
             : null;
       });
     } on Object catch (error) {
@@ -236,24 +341,45 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('No computador "${server.name}", aprove o celular somente se o c\u00f3digo abaixo for igual:'),
+              Text(
+                'No computador "${server.name}", aprove o celular somente se o c\u00f3digo abaixo for igual:',
+              ),
               const SizedBox(height: 18),
               Center(
-                child: Text(session.comparisonCode,
-                    style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: 4)),
+                child: Text(
+                  session.comparisonCode,
+                  style: const TextStyle(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 4,
+                  ),
+                ),
               ),
               const SizedBox(height: 14),
-              const Text('O Windfull s\u00f3 guarda a credencial depois da aprova\u00e7\u00e3o. Se os c\u00f3digos forem diferentes, cancele.'),
+              const Text(
+                'O Windfull s\u00f3 guarda a credencial depois da aprova\u00e7\u00e3o. Se os c\u00f3digos forem diferentes, cancele.',
+              ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Os c\u00f3digos conferem')),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Os c\u00f3digos conferem'),
+            ),
           ],
         ),
       );
       if (confirmed != true) return;
-      if (mounted) setState(() => _connectionError = 'Pedido enviado. Aguardando aprova\u00e7\u00e3o no computador...');
+      if (mounted) {
+        setState(
+          () => _connectionError =
+              'Pedido enviado. Aguardando aprova\u00e7\u00e3o no computador...',
+        );
+      }
       final deadline = DateTime.now().add(const Duration(minutes: 3));
       var status = 'pending';
       while (status == 'pending' && DateTime.now().isBefore(deadline)) {
@@ -261,9 +387,11 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         status = await _client.pairingStatus(session);
       }
       if (status != 'approved') {
-        throw WindfullException(status == 'rejected'
-            ? 'O pareamento foi recusado no computador.'
-            : 'O pedido de pareamento expirou. Tente novamente.');
+        throw WindfullException(
+          status == 'rejected'
+              ? 'O pareamento foi recusado no computador.'
+              : 'O pedido de pareamento expirou. Tente novamente.',
+        );
       }
       final credential = _client.credentialFor(session);
       await _pairingStore.save(credential);
@@ -297,7 +425,11 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
       (_snapshot?['state'] as Map?)?.cast<String, dynamic>() ?? const {};
   Map<String, dynamic> get _capabilities =>
       (_snapshot?['capabilities'] as Map?)?.cast<String, dynamic>() ?? const {};
-  bool get _online => _credential != null && _snapshot?['connected'] == true && _connectionError == null && _deviceError == null;
+  bool get _online =>
+      _credential != null &&
+      _snapshot?['connected'] == true &&
+      _connectionError == null &&
+      _deviceError == null;
 
   List<Widget> _buildControls() {
     final result = <Widget>[];
@@ -309,15 +441,21 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
     }
 
     if (caps['power'] == true) {
-      add(_ControlTile(
-        icon: Icons.power_settings_new_rounded,
-        title: 'Energia',
-        subtitle: state['power'] == true ? 'Ligado' : state['power'] == false ? 'Desligado' : 'Estado desconhecido',
-        trailing: Switch(
-          value: state['power'] == true,
-          onChanged: _online ? (value) => _sendCommand('power', value) : null,
+      add(
+        _ControlTile(
+          icon: Icons.power_settings_new_rounded,
+          title: 'Energia',
+          subtitle: state['power'] == true
+              ? 'Ligado'
+              : state['power'] == false
+              ? 'Desligado'
+              : 'Estado desconhecido',
+          trailing: Switch(
+            value: state['power'] == true,
+            onChanged: _online ? (value) => _sendCommand('power', value) : null,
+          ),
         ),
-      ));
+      );
     }
     if (caps['temperature'] is Map) {
       final range = (caps['temperature'] as Map).cast<String, dynamic>();
@@ -331,71 +469,183 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
       final current = currentValue is num && currentValue.toDouble().isFinite
           ? currentValue.toDouble()
           : null;
-      if (!min.isFinite || !max.isFinite || !step.isFinite || step <= 0 || max < min) {
-        add(const _ControlTile(
-          icon: Icons.device_thermostat_rounded,
-          title: 'Temperatura',
-          subtitle: 'Limites n\u00e3o informados corretamente pelo computador',
-          trailing: SizedBox.shrink(),
-        ));
+      if (!min.isFinite ||
+          !max.isFinite ||
+          !step.isFinite ||
+          step <= 0 ||
+          max < min) {
+        add(
+          const _ControlTile(
+            icon: Icons.device_thermostat_rounded,
+            title: 'Temperatura',
+            subtitle:
+                'Limites n\u00e3o informados corretamente pelo computador',
+            trailing: SizedBox.shrink(),
+          ),
+        );
       } else {
-      add(_ControlTile(
-        icon: Icons.device_thermostat_rounded,
-        title: 'Temperatura',
-        subtitle: current == null
-            ? 'Estado desconhecido - ${min.toStringAsFixed(0)}-${max.toStringAsFixed(0)} \u00b0C'
-            : '${current.toStringAsFixed(1).replaceAll('.0', '')} \u00b0C${state['ambientTemperature'] is num && (state['ambientTemperature'] as num).toDouble().isFinite ? ' - ambiente ${(state['ambientTemperature'] as num).toStringAsFixed(1)} \u00b0C' : ''}',
-        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-          IconButton(onPressed: _online && current != null && current - step >= min ? () => _sendCommand('temperature', current - step) : null, icon: const Icon(Icons.remove_circle_outline)),
-          IconButton(onPressed: _online && current != null && current + step <= max ? () => _sendCommand('temperature', current + step) : null, icon: const Icon(Icons.add_circle_outline)),
-        ]),
-      ));
+        add(
+          _ControlTile(
+            icon: Icons.device_thermostat_rounded,
+            title: 'Temperatura',
+            subtitle: current == null
+                ? 'Estado desconhecido - ${min.toStringAsFixed(0)}-${max.toStringAsFixed(0)} \u00b0C'
+                : '${current.toStringAsFixed(1).replaceAll('.0', '')} \u00b0C${state['ambientTemperature'] is num && (state['ambientTemperature'] as num).toDouble().isFinite ? ' - ambiente ${(state['ambientTemperature'] as num).toStringAsFixed(1)} \u00b0C' : ''}',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  onPressed: _online && current != null && current - step >= min
+                      ? () => _sendCommand('temperature', current - step)
+                      : null,
+                  icon: const Icon(Icons.remove_circle_outline),
+                ),
+                IconButton(
+                  onPressed: _online && current != null && current + step <= max
+                      ? () => _sendCommand('temperature', current + step)
+                      : null,
+                  icon: const Icon(Icons.add_circle_outline),
+                ),
+              ],
+            ),
+          ),
+        );
       }
     }
-    final modes = (caps['modes'] as List?)?.whereType<String>().toList() ?? const <String>[];
+    final modes =
+        (caps['modes'] as List?)?.whereType<String>().toList() ??
+        const <String>[];
     if (modes.isNotEmpty) {
-      add(_choiceControl('Modo', Icons.tune_rounded, modes, state['mode'] is String ? state['mode'] as String : null, 'mode'));
+      add(
+        _choiceControl(
+          'Modo',
+          Icons.tune_rounded,
+          modes,
+          state['mode'] is String ? state['mode'] as String : null,
+          'mode',
+        ),
+      );
     }
-    final fanSpeeds = (caps['fanSpeeds'] as List?)?.whereType<String>().toList() ?? const <String>[];
+    final fanSpeeds =
+        (caps['fanSpeeds'] as List?)?.whereType<String>().toList() ??
+        const <String>[];
     if (fanSpeeds.isNotEmpty) {
-      add(_choiceControl('Ventilacao', Icons.air_rounded, fanSpeeds, state['fanSpeed'] is String ? state['fanSpeed'] as String : null, 'fanSpeed'));
+      add(
+        _choiceControl(
+          'Ventilação',
+          Icons.air_rounded,
+          fanSpeeds,
+          state['fanSpeed'] is String ? state['fanSpeed'] as String : null,
+          'fanSpeed',
+        ),
+      );
     }
     if (caps['windFree'] == true) {
-      add(_ControlTile(
-        icon: Icons.air_rounded,
-        title: 'WindFree',
-        subtitle: state['windFree'] == true ? 'Ativado' : state['windFree'] == false ? 'Desativado' : 'Estado desconhecido',
-        trailing: Switch(value: state['windFree'] == true, onChanged: _online ? (value) => _sendCommand('windFree', value) : null),
-      ));
+      add(
+        _ControlTile(
+          icon: Icons.air_rounded,
+          title: 'WindFree',
+          subtitle: state['windFree'] == true
+              ? 'Ativado'
+              : state['windFree'] == false
+              ? 'Desativado'
+              : 'Estado desconhecido',
+          trailing: Switch(
+            value: state['windFree'] == true,
+            onChanged: _online
+                ? (value) => _sendCommand('windFree', value)
+                : null,
+          ),
+        ),
+      );
     }
     if (result.isEmpty) {
-      result.add(_ControlTile(
-        icon: Icons.info_outline_rounded,
-        title: 'Controles indispon\u00edveis',
-        subtitle: _credential == null ? 'Pareie com o computador para ler as capacidades.' : 'O servidor ainda n\u00e3o anunciou capacidades control\u00e1veis.',
-        trailing: const SizedBox.shrink(),
-      ));
+      result.add(
+        _ControlTile(
+          icon: Icons.info_outline_rounded,
+          title: 'Controles indispon\u00edveis',
+          subtitle: _credential == null
+              ? 'Pareie com o computador para ler as capacidades.'
+              : 'O servidor ainda n\u00e3o anunciou capacidades control\u00e1veis.',
+          trailing: const SizedBox.shrink(),
+        ),
+      );
     }
     return result;
   }
 
-  Widget _choiceControl(String title, IconData icon, List<String> options, String? value, String type) =>
-      Container(
-        padding: const EdgeInsets.fromLTRB(15, 9, 12, 9),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: const Color(0xffe8edeb))),
-        child: Row(children: [
-          Icon(icon, color: const Color(0xff428478), size: 21),
-          const SizedBox(width: 12),
-          Expanded(child: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
-          DropdownButton<String>(
-            value: options.contains(value) ? value : null,
-            hint: Text(value ?? '-'),
-            underline: const SizedBox.shrink(),
-            items: options.map((option) => DropdownMenuItem(value: option, child: Text(option))).toList(),
-            onChanged: _online ? (selected) { if (selected != null) _sendCommand(type, selected); } : null,
-          ),
-        ]),
-      );
+  Widget _choiceControl(
+    String title,
+    IconData icon,
+    List<String> options,
+    String? value,
+    String type,
+  ) => Material(
+    color: WindfullPalette.surface,
+    borderRadius: BorderRadius.circular(18),
+    child: InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: _online
+          ? () async {
+              final selected = await showModalBottomSheet<String>(
+                context: context,
+                backgroundColor: Colors.transparent,
+                showDragHandle: false,
+                builder: (context) => _ChoiceSheet(
+                  icon: icon,
+                  title: title,
+                  selected: value,
+                  options: options,
+                ),
+              );
+              if (selected != null) _sendCommand(type, selected);
+            }
+          : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 13, 10),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: WindfullPalette.raised,
+                borderRadius: BorderRadius.circular(13),
+              ),
+              child: Icon(icon, color: WindfullPalette.accent, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: WindfullPalette.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    value == null ? '—' : _displayOption(value),
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: WindfullPalette.muted,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 
   Future<void> _sendCommand(String type, Object value) async {
     final credential = _credential;
@@ -412,9 +662,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
     } on Object catch (error) {
       if (mounted) {
         setState(() {
-          _snapshot = null;
-          _connectionError = error.toString();
-          _deviceError = null;
+          _deviceError = error.toString();
         });
       }
     }
@@ -429,239 +677,341 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
           slivers: [
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(22, 16, 22, 32),
-              sliver: SliverList.list(children: [
-                Row(children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: const Color(0xffd9eee9),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(Icons.air_rounded,
-                        color: Color(0xff087f72), size: 25),
+              sliver: SliverList.list(
+                children: [
+                  Row(
+                    children: [
+                      const WindfullBrandMark(size: 42),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Windfull',
+                              style: TextStyle(
+                                color: WindfullPalette.text,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 19,
+                              ),
+                            ),
+                            Text(
+                              'Controle local do seu ar-condicionado',
+                              style: TextStyle(
+                                color: WindfullPalette.muted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Configura\u00e7\u00f5es',
+                        onPressed: () => _showSettings(context),
+                        icon: const Icon(Icons.settings_outlined),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  const Expanded(
+                  const SizedBox(height: 28),
+                  Container(
+                    padding: const EdgeInsets.all(21),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(26),
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF1F4140), Color(0xFF142C2E)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x4210AAAA),
+                          blurRadius: 30,
+                          offset: Offset(0, 14),
+                        ),
+                      ],
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Windfull',
+                        Row(
+                          children: [
+                            Container(
+                              width: 9,
+                              height: 9,
+                              decoration: BoxDecoration(
+                                color: _online
+                                    ? WindfullPalette.accent
+                                    : Color(0xFFF0BC70),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _credential == null
+                                  ? 'SEM CONEX\u00c3O'
+                                  : _connectionError != null
+                                  ? 'PC SEM RESPOSTA'
+                                  : _snapshot?['connected'] == true &&
+                                        _deviceError == null
+                                  ? 'PC E AR CONECTADOS'
+                                  : _deviceError != null
+                                  ? 'ERRO DO APARELHO'
+                                  : _snapshot != null
+                                  ? 'PC CONECTADO - AR OFFLINE'
+                                  : 'CONECTANDO AO PC',
+                              style: const TextStyle(
+                                color: Color(0xFFD8E9E5),
+                                letterSpacing: 1.1,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const Spacer(),
+                            Icon(
+                              _credential == null
+                                  ? Icons.wifi_off_rounded
+                                  : Icons.wifi_rounded,
+                              color: const Color(0xFFC0D9D2),
+                              size: 19,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 27),
+                        Text(
+                          _snapshot?['device'] is Map
+                              ? ((_snapshot!['device'] as Map)['name']
+                                        as String? ??
+                                    'Windfull conectado')
+                              : 'Conecte seu computador',
+                          style: TextStyle(
+                            color: WindfullPalette.text,
+                            fontSize: 24,
+                            height: 1.1,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 9),
+                        Text(
+                          _credential == null
+                              ? 'Conecte-se ao Windfull no computador para come\u00e7ar a controlar o aparelho.'
+                              : (_connectionError ??
+                                    _deviceError ??
+                                    (_snapshot?['connected'] == false
+                                        ? 'O computador respondeu, mas o aparelho est\u00e1 indispon\u00edvel.'
+                                        : _snapshot?['device'] is Map
+                                        ? '${(_snapshot!['device'] as Map)['model'] ?? 'Ar-condicionado'} - ${(_snapshot!['device'] as Map)['host'] ?? 'conectado localmente'}'
+                                        : 'Servidor pareado. Aguardando o estado do aparelho.')),
+                          style: TextStyle(
+                            color: Color(0xFFD0E1DC),
+                            fontSize: 14,
+                            height: 1.45,
+                          ),
+                        ),
+                        const SizedBox(height: 21),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: _busy ? null : _discover,
+                            icon: const Icon(Icons.search_rounded, size: 19),
+                            label: Text(
+                              _busy
+                                  ? 'Conectando...'
+                                  : _credential == null
+                                  ? 'Buscar computador na rede'
+                                  : 'Adicionar outro computador',
+                            ),
+                            style: FilledButton.styleFrom(
+                              foregroundColor: WindfullPalette.canvas,
+                              backgroundColor: WindfullPalette.accent,
+                              disabledBackgroundColor: WindfullPalette.accent,
+                              disabledForegroundColor: WindfullPalette.canvas,
+                              padding: const EdgeInsets.symmetric(vertical: 15),
+                              textStyle: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        Center(
+                          child: TextButton.icon(
+                            onPressed: _busy ? null : _connectByIp,
+                            icon: const Icon(
+                              Icons.edit_location_alt_outlined,
+                              size: 18,
+                            ),
+                            label: const Text('Inserir IP do computador'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: WindfullPalette.accent,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 9),
+                        Center(
+                          child: Text(
+                            _connectionError ??
+                                (_credential == null
+                                    ? 'A descoberta procura computadores Windfull nesta rede local.'
+                                    : 'Credencial de pareamento protegida no armazenamento seguro do Android.'),
+                            textAlign: TextAlign.center,
                             style: TextStyle(
-                                fontWeight: FontWeight.w800, fontSize: 19)),
-                        Text('Controle local do seu ar-condicionado',
-                            style: TextStyle(
-                                color: Color(0xff6e7b79), fontSize: 12)),
+                              fontSize: 11,
+                              color: Color(0xFFB8D2CB),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Configura\u00e7\u00f5es',
-                    onPressed: () => _showSettings(context),
-                    icon: const Icon(Icons.settings_outlined),
-                  ),
-                ]),
-                const SizedBox(height: 28),
-                Container(
-                  padding: const EdgeInsets.all(21),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(26),
-                    gradient: const LinearGradient(
-                      colors: [Color(0xff103d3a), Color(0xff176c60)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x24103d3a),
-                        blurRadius: 22,
-                        offset: Offset(0, 10),
+                  const SizedBox(height: 25),
+                  if (_servers.isNotEmpty) ...[
+                    const Text(
+                      'Computadores na rede',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
                       ),
-                    ],
-                  ),
-                  child: Column(
+                    ),
+                    const SizedBox(height: 10),
+                    ..._servers.map(
+                      (server) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 11,
+                          ),
+                          decoration: BoxDecoration(
+                            color: WindfullPalette.surface,
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.computer_rounded,
+                                color: WindfullPalette.accent,
+                              ),
+                              const SizedBox(width: 11),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      server.name,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    Text(
+                                      server.host,
+                                      style: const TextStyle(
+                                        color: WindfullPalette.muted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (_credential?.serverId == server.id &&
+                                  _credential?.fingerprint ==
+                                      server.fingerprint)
+                                const Text(
+                                  'Pareado',
+                                  style: TextStyle(
+                                    color: WindfullPalette.accent,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12,
+                                  ),
+                                )
+                              else
+                                TextButton(
+                                  onPressed: _busy ? null : () => _pair(server),
+                                  child: const Text('Parear'),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(children: [
-                        Container(
-                          width: 9,
-                          height: 9,
-                          decoration: const BoxDecoration(
-                            color: Color(0xffffc66d),
-                            shape: BoxShape.circle,
-                          ),
+                      const Text(
+                        'Controles',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
                         ),
-                        const SizedBox(width: 8),
-                        Text(_credential == null
-                            ? 'SEM CONEX\u00c3O'
-                            : _connectionError != null
-                                ? 'PC SEM RESPOSTA'
-                                : _snapshot?['connected'] == true && _deviceError == null
-                                    ? 'PC E AR CONECTADOS'
-                                    : _deviceError != null
-                                        ? 'ERRO DO APARELHO'
-                                    : _snapshot != null
-                                        ? 'PC CONECTADO - AR OFFLINE'
-                                        : 'CONECTANDO AO PC',
-                            style: const TextStyle(
-                              color: Color(0xffd6e8e3),
-                              letterSpacing: 1.1,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                            )),
-                        const Spacer(),
-                        Icon(_credential == null ? Icons.wifi_off_rounded : Icons.wifi_rounded,
-                            color: const Color(0xffc0d9d2), size: 19),
-                      ]),
-                      const SizedBox(height: 27),
-                      Text(_snapshot?['device'] is Map
-                          ? ((_snapshot!['device'] as Map)['name'] as String? ?? 'Windfull conectado')
-                          : 'Conecte seu computador',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              height: 1.1,
-                              fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 9),
+                      ),
+                      const SizedBox(height: 4),
                       Text(
                         _credential == null
-                            ? 'Conecte-se ao Windfull no computador para come\u00e7ar a controlar o aparelho.'
-                            : (_connectionError ?? _deviceError ?? (_snapshot?['connected'] == false
-                                ? 'O computador respondeu, mas o aparelho est\u00e1 indispon\u00edvel.'
-                                : _snapshot?['device'] is Map
-                                ? '${(_snapshot!['device'] as Map)['model'] ?? 'Ar-condicionado'} - ${(_snapshot!['device'] as Map)['host'] ?? 'conectado localmente'}'
-                                : 'Servidor pareado. Aguardando o estado do aparelho.')),
+                            ? 'AGUARDANDO PAREAMENTO'
+                            : _connectionError != null
+                            ? 'PC SEM RESPOSTA'
+                            : _deviceError != null
+                            ? 'ERRO DO APARELHO'
+                            : (_snapshot?['connected'] == true
+                                  ? 'ESTADO AO VIVO'
+                                  : _snapshot != null
+                                  ? 'AR OFFLINE'
+                                  : 'AGUARDANDO ESTADO'),
                         style: TextStyle(
-                            color: Color(0xffd0e1dc),
-                            fontSize: 14,
-                            height: 1.45),
-                      ),
-                      const SizedBox(height: 21),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: _busy ? null : _discover,
-                          icon: const Icon(Icons.search_rounded, size: 19),
-                            label: Text(_busy ? 'Conectando...' : _credential == null ? 'Buscar computador na rede' : 'Adicionar outro computador'),
-                          style: FilledButton.styleFrom(
-                            foregroundColor: const Color(0xff123e39),
-                            backgroundColor: const Color(0xffe4f4ef),
-                            disabledBackgroundColor: const Color(0xffe4f4ef),
-                            disabledForegroundColor: const Color(0xff123e39),
-                            padding: const EdgeInsets.symmetric(vertical: 15),
-                            textStyle: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ),
-                      Center(
-                        child: TextButton.icon(
-                          onPressed: _busy ? null : _connectByIp,
-                          icon: const Icon(Icons.edit_location_alt_outlined, size: 18),
-                          label: const Text('Inserir IP do computador'),
-                          style: TextButton.styleFrom(foregroundColor: const Color(0xffe4f4ef)),
-                        ),
-                      ),
-                      const SizedBox(height: 9),
-                      Center(
-                        child: Text(_connectionError ?? (_credential == null
-                            ? 'A descoberta procura computadores Windfull nesta rede local.'
-                            : 'Credencial de pareamento protegida no armazenamento seguro do Android.'),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 11, color: Color(0xffb8d2cb))),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 25),
-                if (_servers.isNotEmpty) ...[
-                  const Text('Computadores na rede', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 10),
-                  ..._servers.map((server) => Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xffe8edeb))),
-                      child: Row(children: [
-                        const Icon(Icons.computer_rounded, color: Color(0xff428478)),
-                        const SizedBox(width: 11),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(server.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                          Text(server.host, style: const TextStyle(color: Color(0xff899692), fontSize: 11)),
-                        ])),
-                        if (_credential?.serverId == server.id && _credential?.fingerprint == server.fingerprint)
-                          const Text('Pareado', style: TextStyle(color: Color(0xff087f72), fontWeight: FontWeight.w700, fontSize: 12))
-                        else
-                          TextButton(onPressed: _busy ? null : () => _pair(server), child: const Text('Parear')),
-                      ]),
-                    ),
-                  )),
-                  const SizedBox(height: 16),
-                ],
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Controles',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 4),
-                    Text(
-                      _credential == null
-                          ? 'AGUARDANDO PAREAMENTO'
-                          : _connectionError != null
-                              ? 'PC SEM RESPOSTA'
-                              : _deviceError != null
-                                  ? 'ERRO DO APARELHO'
-                                  : (_snapshot?['connected'] == true
-                                      ? 'ESTADO AO VIVO'
-                                      : _snapshot != null
-                                          ? 'AR OFFLINE'
-                                          : 'AGUARDANDO ESTADO'),
-                      style: TextStyle(
                           color: colors.primary,
                           letterSpacing: .7,
                           fontSize: 9,
-                          fontWeight: FontWeight.w800),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                ..._buildControls(),
-                const SizedBox(height: 19),
-                Container(
-                  padding: const EdgeInsets.all(15),
-                  decoration: BoxDecoration(
-                    color: const Color(0xffeaf0ee),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: const Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.lock_outline_rounded,
-                          size: 19, color: Color(0xff60716d)),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'A conexao - feita diretamente na rede local. O computador precisa aprovar o pareamento antes do primeiro uso.',
-                          style: TextStyle(
-                              color: Color(0xff53635f),
-                              fontSize: 12,
-                              height: 1.45),
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 20),
-                const Center(
-                  child: Text('W I N D F U L L   \u2022   REDE LOCAL',
+                  const SizedBox(height: 12),
+                  ..._buildControls(),
+                  const SizedBox(height: 19),
+                  Container(
+                    padding: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(
+                      color: WindfullPalette.surface,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.lock_outline_rounded,
+                          size: 19,
+                          color: WindfullPalette.accent,
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Comunicação feita diretamente na rede local. O computador precisa aprovar o pareamento antes do primeiro uso.',
+                            style: TextStyle(
+                              color: WindfullPalette.muted,
+                              fontSize: 12,
+                              height: 1.45,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Center(
+                    child: Text(
+                      'W I N D F U L L   \u2022   REDE LOCAL',
                       style: TextStyle(
-                          color: Color(0xff9aa7a3),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1)),
-                ),
-              ]),
+                        color: WindfullPalette.muted,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -680,29 +1030,40 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Configura\u00e7\u00f5es',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+              const Text(
+                'Configura\u00e7\u00f5es',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+              ),
               const SizedBox(height: 14),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(Icons.computer_rounded),
                 title: Text(_credential?.serverId ?? 'Nenhum servidor pareado'),
-                subtitle: Text(_credential == null
-                    ? 'Nenhum v\u00ednculo salvo neste celular'
-                    : '${_credential!.host}:${_credential!.port} - ${_snapshot?['connected'] == true ? 'conectado' : 'sem resposta'}'),
+                subtitle: Text(
+                  _credential == null
+                      ? 'Nenhum v\u00ednculo salvo neste celular'
+                      : '${_credential!.host}:${_credential!.port} - ${_snapshot?['connected'] == true ? 'conectado' : 'sem resposta'}',
+                ),
               ),
               const ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(Icons.security_rounded),
                 title: Text('Privacidade'),
-                subtitle: Text('Comunica\u00e7\u00e3o restrita \u00e0 rede local'),
+                subtitle: Text(
+                  'Comunica\u00e7\u00e3o restrita \u00e0 rede local',
+                ),
               ),
               if (_credential != null)
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.link_off_rounded, color: Color(0xffa34235)),
+                  leading: const Icon(
+                    Icons.link_off_rounded,
+                    color: Color(0xFFE7978C),
+                  ),
                   title: const Text('Desvincular este celular'),
-                  subtitle: const Text('Apaga a credencial local; para reconectar, pareie novamente no PC.'),
+                  subtitle: const Text(
+                    'Apaga a credencial local; para reconectar, pareie novamente no PC.',
+                  ),
                   onTap: _unlink,
                 ),
             ],
@@ -731,29 +1092,29 @@ class _ManualIpDialogState extends State<_ManualIpDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: const Text('Conectar por IPv4'),
-        content: TextField(
-          controller: _addressController,
-          autofocus: true,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'IP do computador',
-            hintText: '192.168.1.20',
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (value) => Navigator.pop(context, value),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, _addressController.text),
-            child: const Text('Buscar'),
-          ),
-        ],
-      );
+    title: const Text('Conectar por IPv4'),
+    content: TextField(
+      controller: _addressController,
+      autofocus: true,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: const InputDecoration(
+        labelText: 'IP do computador',
+        hintText: '192.168.1.20',
+        border: OutlineInputBorder(),
+      ),
+      onSubmitted: (value) => Navigator.pop(context, value),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancelar'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.pop(context, _addressController.text),
+        child: const Text('Buscar'),
+      ),
+    ],
+  );
 }
 
 class _ControlTile extends StatelessWidget {
@@ -771,38 +1132,175 @@ class _ControlTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.fromLTRB(15, 13, 10, 13),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xffe8edeb)),
+    padding: const EdgeInsets.fromLTRB(15, 13, 10, 13),
+    decoration: BoxDecoration(
+      color: WindfullPalette.surface,
+      borderRadius: BorderRadius.circular(18),
+    ),
+    child: Row(
+      children: [
+        Container(
+          height: 38,
+          width: 38,
+          decoration: BoxDecoration(
+            color: WindfullPalette.raised,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, color: WindfullPalette.accent, size: 21),
         ),
-        child: Row(children: [
-          Container(
-            height: 38,
-            width: 38,
-            decoration: BoxDecoration(
-              color: const Color(0xffedf5f2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: const Color(0xff428478), size: 21),
+        const SizedBox(width: 11),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: WindfullPalette.muted,
+                  fontSize: 10,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 3),
-                Text(subtitle,
-                    style: const TextStyle(
-                        color: Color(0xff899692), fontSize: 10)),
-              ],
-            ),
-          ),
-          trailing,
-        ]),
-      );
+        ),
+        trailing,
+      ],
+    ),
+  );
 }
+
+class _ChoiceSheet extends StatelessWidget {
+  const _ChoiceSheet({
+    required this.icon,
+    required this.title,
+    required this.selected,
+    required this.options,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? selected;
+  final List<String> options;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    top: false,
+    child: Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      decoration: const BoxDecoration(
+        color: WindfullPalette.raised,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x66000000),
+            blurRadius: 30,
+            offset: Offset(0, -8),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              width: 34,
+              height: 4,
+              decoration: BoxDecoration(
+                color: WindfullPalette.muted.withValues(alpha: .4),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Icon(icon, color: WindfullPalette.accent, size: 19),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close_rounded, size: 18),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          for (final option in options)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Material(
+                color: option == selected
+                    ? WindfullPalette.accent.withValues(alpha: .11)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(13),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(13),
+                  onTap: () => Navigator.pop(context, option),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 12,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _displayOption(option),
+                            style: TextStyle(
+                              color: option == selected
+                                  ? WindfullPalette.accent
+                                  : WindfullPalette.text,
+                              fontSize: 13,
+                              fontWeight: option == selected
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                        if (option == selected)
+                          const Icon(
+                            Icons.check_rounded,
+                            color: WindfullPalette.accent,
+                            size: 18,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+String _displayOption(String value) => switch (value.toLowerCase()) {
+  'auto' => 'Automático',
+  'cool' => 'Resfriar',
+  'dry' => 'Desumidificar',
+  'fan' || 'wind' => 'Ventilar',
+  'heat' => 'Aquecer',
+  'low' => 'Baixa',
+  'medium' => 'Média',
+  'high' => 'Alta',
+  'turbo' => 'Turbo',
+  _ => value,
+};
