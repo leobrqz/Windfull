@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="app/assets/brand/windfull-mark.svg" width="72" height="72" alt="Windfull logo">
+  <img src="app/assets/brand/windfull-mark.svg" width="72" height="72" alt="WindFull logo">
 </p>
 
-<h1 align="center">Windfull</h1>
+<h1 align="center">WindFull</h1>
 
 <p align="center">Control a Samsung WindFree air conditioner from Android through a Windows system-tray host on your local network.</p>
 
@@ -23,7 +23,7 @@ Controls are shown according to the capabilities reported by the air conditioner
 
 ## Connect
 
-1. Start the Windfull host on Windows and connect the PC, phone and air conditioner to the same local network.
+1. Start the WindFull host on Windows and connect the PC, phone and air conditioner to the same local network.
 2. Open the Android app and select the discovered PC. If discovery is blocked, enter the PC's IPv4 address.
 3. Compare the six-digit code in the app with the code shown on the PC, then approve the phone in the Windows host.
 
@@ -35,7 +35,7 @@ The Android app discovers Windows hosts over UDP and communicates with the host 
 
 The Windows host uses a Rust bridge to communicate with the air conditioner through Samsung OCF over CoAP and DTLS. The bridge discovers device resources at runtime and exposes only the controls the appliance advertises.
 
-The air conditioner must be onboarded in Samsung SmartThings once to provision local OCF access. After that, Windfull communicates with it on the LAN without calling SmartThings cloud APIs.
+The air conditioner must be onboarded in Samsung SmartThings once to provision local OCF access. After that, WindFull communicates with it on the LAN without calling SmartThings cloud APIs.
 
 ## Build and develop
 

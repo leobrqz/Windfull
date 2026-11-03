@@ -1,8 +1,8 @@
-# Windfull project guide
+# WindFull project guide
 
 ## Project scope
 
-- Windfull is a personal Android remote for a Samsung WindFree air conditioner, with a Windows host on the local network.
+- WindFull is a personal Android remote for a Samsung WindFree air conditioner, with a Windows host on the local network.
 - The Windows host is intended to be a desktop app with a system-tray experience inspired by the Samsung WindFree Tray App. Its own interface should provide appliance controls, configuration and approval of Android devices; the local server runs behind it. Do not replace this experience with a browser dashboard.
 - The Windows interface should be a compact, frameless panel positioned beside the system-tray icon, following the upstream reference screenshot, rather than a large desktop window.
 - The intended experience includes automatic host discovery, explicit approval on the PC, persistent device pairing and controls appropriate to the actual appliance. These features are not implemented in the initial scaffold.

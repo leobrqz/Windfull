@@ -8,7 +8,7 @@ class WindfullNetworkServer {
   WindfullNetworkServer({
     required this.identity,
     required this.onRequest,
-    this.name = 'Windfull para Windows',
+    this.name = 'WindFull para Windows',
     InternetAddress? bindAddress,
     this.httpsPort = 47657,
     this.discoveryPort = 47656,

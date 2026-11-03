@@ -19,7 +19,7 @@ void main() {
     final candidates = [
       DiscoveredServer(
         id: 'pc-1',
-        name: 'PC Windfull',
+        name: 'PC WindFull',
         host: '192.168.1.22',
         port: 9443,
         fingerprint: List.filled(64, 'a').join(),
@@ -47,7 +47,7 @@ void main() {
     expect(client.matchPinnedServer(credential, candidates.skip(1)), isNull);
   });
 
-  test('validates IPv4 and parses only valid Windfull announcements', () {
+  test('validates IPv4 and parses only valid WindFull announcements', () {
     expect(WindfullClient.parseIpv4('10.0.2.2').address, '10.0.2.2');
     expect(
       () => WindfullClient.parseIpv4('not-an-ip'),
@@ -56,7 +56,7 @@ void main() {
     final announcement = WindfullClient.parseAnnouncement({
       'protocol': 'windfull/1',
       'id': 'host-1',
-      'name': 'PC Windfull',
+      'name': 'PC WindFull',
       'port': 8443,
       'fingerprint': List.filled(64, 'A').join(),
     }, '10.0.2.2');

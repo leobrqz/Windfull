@@ -1,6 +1,6 @@
 /// Values exposed by the Samsung OCF appliance profile.
 ///
-/// Raw values are retained so an appliance option not yet modeled by Windfull
+/// Raw values are retained so an appliance option not yet modeled by WindFull
 /// is not silently translated into a different mode.
 enum AcMode { cool, dry, fan, auto, heat, unknown }
 

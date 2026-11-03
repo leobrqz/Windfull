@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'windfull_theme.dart';
 
-/// The Windfull mark: three calm air currents gathered into one clear route.
+/// The WindFull mark: three calm air currents gathered into one clear route.
 class WindfullBrandMark extends StatelessWidget {
   const WindfullBrandMark({this.size = 36, super.key});
 

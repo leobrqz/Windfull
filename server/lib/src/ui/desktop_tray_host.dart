@@ -69,13 +69,13 @@ class _WindfullDesktopHostState extends State<WindfullDesktopHost>
     await iconFile.parent.create(recursive: true);
     await iconFile.writeAsBytes(iconBytes.buffer.asUint8List(), flush: true);
     await trayManager.setIcon(iconFile.path);
-    await trayManager.setToolTip('Windfull — controle local');
+    await trayManager.setToolTip('WindFull — controle local');
     await trayManager.setContextMenu(
       Menu(
         items: [
-          MenuItem(key: 'show_window', label: 'Abrir Windfull'),
+          MenuItem(key: 'show_window', label: 'Abrir WindFull'),
           MenuItem.separator(),
-          MenuItem(key: 'exit_app', label: 'Sair do Windfull'),
+          MenuItem(key: 'exit_app', label: 'Sair do WindFull'),
         ],
       ),
     );

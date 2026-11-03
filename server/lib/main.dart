@@ -16,7 +16,7 @@ Future<void> main() async {
       minimumSize: Size(360, 560),
       maximumSize: Size(380, 680),
       center: false,
-      title: 'Windfull',
+      title: 'WindFull',
       titleBarStyle: TitleBarStyle.hidden,
       backgroundColor: Colors.transparent,
       alwaysOnTop: true,

@@ -12,7 +12,7 @@ class WindfullServerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Windfull',
+    title: 'WindFull',
     debugShowCheckedModeBanner: false,
     theme: WindfullTheme.build(),
     home: WindfullDesktopHost(

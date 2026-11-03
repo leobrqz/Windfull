@@ -126,7 +126,7 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
     final ready = state.status == HostStatus.ready;
     return _PanelHeader(
       leading: const WindfullBrandMark(size: 36),
-      title: 'Windfull',
+      title: 'WindFull',
       subtitle: ready ? 'Controle local' : _serverStatusLabel(state.status),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -924,7 +924,7 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: WindfullTheme.surface,
         title: const Text('Revogar celular?'),
-        content: Text('${device.name} perderá o acesso ao Windfull.'),
+        content: Text('${device.name} perderá o acesso ao WindFull.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -1682,12 +1682,12 @@ String _friendlyError(Object? error, {bool server = false}) {
   if (value.contains('bridge_start_failed') ||
       value.contains('windfull-samsung-ocf') ||
       value.contains('bridge_closed')) {
-    return 'A ponte Samsung não está disponível. Recompile o host incluindo a integração e reinicie o Windfull.';
+    return 'A ponte Samsung não está disponível. Recompile o host incluindo a integração e reinicie o WindFull.';
   }
   if (server) {
     if (value.contains('address already in use') ||
         value.contains('socketexception')) {
-      return 'A porta local está ocupada. Feche outra instância do Windfull e tente novamente.';
+      return 'A porta local está ocupada. Feche outra instância do WindFull e tente novamente.';
     }
     return 'O servidor local não iniciou. Tente novamente; seus pareamentos foram preservados.';
   }

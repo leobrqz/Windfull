@@ -16,7 +16,7 @@ class WindfullApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Windfull',
+    title: 'WindFull',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
@@ -245,7 +245,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         if (_credential == null) {
           setState(
             () => _connectionError =
-                'Nenhum computador encontrado nesta rede. Confira se o Windfull est\u00e1 aberto no PC.',
+                'Nenhum computador encontrado nesta rede. Confira se o WindFull est\u00e1 aberto no PC.',
           );
         }
         return;
@@ -301,7 +301,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         _servers = visible;
         _connectionError = visible.isEmpty
             ? servers.isEmpty
-                  ? 'Nenhum Windfull respondeu em $ip na porta ${WindfullClient.discoveryPort}.'
+                  ? 'Nenhum WindFull respondeu em $ip na porta ${WindfullClient.discoveryPort}.'
                   : 'A identidade do servidor mudou. O fingerprint salvo n\u00e3o confere; n\u00e3o pareie antes de verificar o PC.'
             : null;
       });
@@ -357,7 +357,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
               ),
               const SizedBox(height: 14),
               const Text(
-                'O Windfull s\u00f3 guarda a credencial depois da aprova\u00e7\u00e3o. Se os c\u00f3digos forem diferentes, cancele.',
+                'O WindFull s\u00f3 guarda a credencial depois da aprova\u00e7\u00e3o. Se os c\u00f3digos forem diferentes, cancele.',
               ),
             ],
           ),
@@ -708,7 +708,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Windfull',
+                              'WindFull',
                               style: TextStyle(
                                 color: WindfullPalette.text,
                                 fontWeight: FontWeight.w700,
@@ -801,7 +801,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
                           _snapshot?['device'] is Map
                               ? ((_snapshot!['device'] as Map)['name']
                                         as String? ??
-                                    'Windfull conectado')
+                                    'WindFull conectado')
                               : 'Conecte seu computador',
                           style: TextStyle(
                             color: WindfullPalette.text,
@@ -813,7 +813,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
                         const SizedBox(height: 9),
                         Text(
                           _credential == null
-                              ? 'Conecte-se ao Windfull no computador para come\u00e7ar a controlar o aparelho.'
+                              ? 'Conecte-se ao WindFull no computador para come\u00e7ar a controlar o aparelho.'
                               : (_connectionError ??
                                     _deviceError ??
                                     (_snapshot?['connected'] == false
@@ -871,7 +871,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
                           child: Text(
                             _connectionError ??
                                 (_credential == null
-                                    ? 'A descoberta procura computadores Windfull nesta rede local.'
+                                    ? 'A descoberta procura computadores WindFull nesta rede local.'
                                     : 'Credencial de pareamento protegida no armazenamento seguro do Android.'),
                             textAlign: TextAlign.center,
                             style: TextStyle(

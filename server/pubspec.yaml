@@ -1,5 +1,5 @@
 name: windfull_server
-description: "Windfull Windows host."
+description: "WindFull Windows host."
 publish_to: 'none'
 version: 0.1.0+1
 

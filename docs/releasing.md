@@ -1,6 +1,6 @@
-# Windfull releases
+# WindFull releases
 
-This procedure adapts the OpenRemoteControl GitHub release workflow to Windfull's Android client and Windows host. A normal source change does not create a version. A requested release is complete only after the commit, annotated tag, GitHub release and attachments have been verified. Respect any explicit request to pause before publication.
+This procedure adapts the OpenRemoteControl GitHub release workflow to WindFull's Android client and Windows host. A normal source change does not create a version. A requested release is complete only after the commit, annotated tag, GitHub release and attachments have been verified. Respect any explicit request to pause before publication.
 
 ## Versions and signing
 
