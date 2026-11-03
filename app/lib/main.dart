@@ -454,6 +454,49 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
       result.add(widget);
     }
 
+    final telemetry = <Widget>[];
+    final ambient = state['ambientTemperature'];
+    final humidity = state['humidity'];
+    final watts = state['instantaneousPowerW'];
+    final energyWh = state['cumulativeEnergyWh'];
+    if (ambient is num && ambient.toDouble().isFinite) {
+      telemetry.add(
+        _TelemetryValue(
+          icon: Icons.thermostat_rounded,
+          label: 'Ambiente',
+          value: '${ambient.toStringAsFixed(1).replaceAll('.0', '')}°',
+        ),
+      );
+    }
+    if (humidity is num && humidity.toDouble().isFinite) {
+      telemetry.add(
+        _TelemetryValue(
+          icon: Icons.water_drop_outlined,
+          label: 'Umidade',
+          value: '${humidity.toStringAsFixed(0)}%',
+        ),
+      );
+    }
+    if (watts is num && watts.toDouble().isFinite) {
+      telemetry.add(
+        _TelemetryValue(
+          icon: Icons.bolt_rounded,
+          label: 'Pot\u00eancia',
+          value: '${watts.toStringAsFixed(0)} W',
+        ),
+      );
+    }
+    if (energyWh is num && energyWh.toDouble().isFinite) {
+      telemetry.add(
+        _TelemetryValue(
+          icon: Icons.electric_bolt_rounded,
+          label: 'Consumo total',
+          value: '${(energyWh / 1000).toStringAsFixed(2)} kWh',
+        ),
+      );
+    }
+    if (telemetry.isNotEmpty) add(_TelemetryPanel(values: telemetry));
+
     if (caps['power'] == true) {
       add(
         _ControlTile(
@@ -1134,6 +1177,92 @@ class _ManualIpDialogState extends State<_ManualIpDialog> {
         child: const Text('Buscar'),
       ),
     ],
+  );
+}
+
+class _TelemetryPanel extends StatelessWidget {
+  const _TelemetryPanel({required this.values});
+
+  final List<Widget> values;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: WindfullPalette.surface,
+      borderRadius: BorderRadius.circular(18),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Row(
+          children: [
+            Icon(
+              Icons.monitor_heart_outlined,
+              size: 17,
+              color: WindfullPalette.accent,
+            ),
+            SizedBox(width: 7),
+            Text(
+              'Ambiente e consumo',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Wrap(spacing: 8, runSpacing: 8, children: values),
+      ],
+    ),
+  );
+}
+
+class _TelemetryValue extends StatelessWidget {
+  const _TelemetryValue({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 142,
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+    decoration: BoxDecoration(
+      color: WindfullPalette.raised,
+      borderRadius: BorderRadius.circular(13),
+    ),
+    child: Row(
+      children: [
+        Icon(icon, color: WindfullPalette.accent, size: 17),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  color: WindfullPalette.muted,
+                  fontSize: 9,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
   );
 }
 

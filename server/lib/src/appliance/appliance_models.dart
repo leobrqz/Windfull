@@ -68,6 +68,9 @@ class ApplianceSnapshot {
     this.power,
     this.temperature,
     this.ambientTemperature,
+    this.humidity,
+    this.instantaneousPowerW,
+    this.cumulativeEnergyWh,
     this.mode,
     this.fanSpeed,
     this.windFree,
@@ -78,6 +81,9 @@ class ApplianceSnapshot {
   final bool? power;
   final double? temperature;
   final double? ambientTemperature;
+  final double? humidity;
+  final double? instantaneousPowerW;
+  final double? cumulativeEnergyWh;
   final AcMode? mode;
   final FanSpeed? fanSpeed;
   final bool? windFree;

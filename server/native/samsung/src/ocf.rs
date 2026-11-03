@@ -24,6 +24,9 @@ const DISCOVERY_PORT: u16 = 5683;
 // Samsung's public OCF endpoint also answers directly on its observed local
 // CoAP source port. This preserves the UDP peer tuple on Windows firewalls.
 const SAMSUNG_PLAIN_PORT: u16 = 49153;
+const COAP_ACK_TIMEOUT_MIN_MS: u64 = 1_000;
+const COAP_ACK_TIMEOUT_MAX_MS: u64 = 1_500;
+const COAP_MAX_RETRANSMITS: usize = 3;
 const DTLS_PORTS: &[u16] = &[
     5684, 49152, 49153, 49154, 49155, 49156, 49157, 49158, 49159, 49160,
 ];
@@ -60,6 +63,9 @@ pub struct Snapshot {
     pub power: Option<bool>,
     pub temperature: Option<f64>,
     pub ambient_temperature: Option<f64>,
+    pub humidity: Option<f64>,
+    pub instantaneous_power_w: Option<f64>,
+    pub cumulative_energy_wh: Option<f64>,
     pub mode: Option<String>,
     pub fan_speed: Option<String>,
     pub wind_free: Option<bool>,
@@ -257,47 +263,15 @@ impl Appliance {
         let msg_id = self.message_id;
         let token = (msg_id & 0xff) as u8;
         let message = encode_request(msg_id, token, method, path, payload)?;
-        self.stream
-            .write_all(&message)
-            .map_err(|_| Error::new("network_error", "Could not send the local OCF request"))?;
-        let mut buf = [0_u8; 16 * 1024];
-        for _ in 0..5 {
-            let n = self.stream.read(&mut buf).map_err(|_| {
-                Error::new(
-                    "timeout",
-                    "The appliance did not answer the local OCF request in time",
-                )
-            })?;
-            if n < 4 {
-                continue;
-            }
-            let tkl = (buf[0] & 0x0f) as usize;
-            let message_type = (buf[0] >> 4) & 0x03;
-            let code = buf[1];
-            if message_type == 2 && code == 0 && tkl == 0 {
-                continue;
-            }
-            if message_type == 0 {
-                self.ack_confirmable(&buf[..n])?;
-            }
-            if n < 4 + tkl || tkl == 0 || buf.get(4) != Some(&token) {
-                continue;
-            }
-            let response = decode_packet(&buf[..n])?;
-            let value = response
-                .payload
-                .map(|payload| {
-                    ciborium::de::from_reader(payload.as_slice()).map_err(|_| {
-                        Error::new("invalid_response", "OCF payload was not valid CBOR")
-                    })
-                })
-                .transpose()?;
-            return Ok((response.code, value));
-        }
-        Err(Error::new(
-            "invalid_response",
-            "The appliance returned no matching OCF response",
-        ))
+        let response = self.exchange_confirmable(&message, msg_id, token)?;
+        let value = response
+            .payload
+            .map(|payload| {
+                ciborium::de::from_reader(payload.as_slice())
+                    .map_err(|_| Error::new("invalid_response", "OCF payload was not valid CBOR"))
+            })
+            .transpose()?;
+        Ok((response.code, value))
     }
 
     fn get(&mut self, path: &str) -> Result<Value, Error> {
@@ -413,37 +387,86 @@ impl Appliance {
             .map_or((path, None), |(path, query)| (path, Some(query)));
         let message =
             encode_request_full(self.message_id, token, method, path, payload, query, block2)?;
-        self.stream
-            .write_all(&message)
-            .map_err(|_| Error::new("network_error", "Could not send the local OCF request"))?;
+        self.exchange_confirmable(&message, self.message_id, token)
+    }
+
+    fn exchange_confirmable(
+        &mut self,
+        message: &[u8],
+        message_id: u16,
+        token: u8,
+    ) -> Result<CoapResponse, Error> {
+        // These requests are CON messages. Retry the identical MID/token so
+        // the appliance can deduplicate a delayed response after packet loss.
+        let mut ack_timeout_ms =
+            rand::thread_rng().gen_range(COAP_ACK_TIMEOUT_MIN_MS..=COAP_ACK_TIMEOUT_MAX_MS);
+        let mut acknowledged = false;
         let mut buf = [0_u8; 16 * 1024];
-        for _ in 0..5 {
-            let n = self.stream.read(&mut buf).map_err(|_| {
-                Error::new(
-                    "timeout",
-                    "The appliance did not answer the local OCF request in time",
-                )
-            })?;
-            if n < 4 {
-                continue;
+        for retransmission in 0..=COAP_MAX_RETRANSMITS {
+            let timeout = Duration::from_millis(ack_timeout_ms);
+            if retransmission == 0 || !acknowledged {
+                self.stream.write_all(message).map_err(|_| {
+                    Error::new(
+                        "network_error",
+                        "Could not send or resend the local OCF request",
+                    )
+                })?;
             }
-            let tkl = (buf[0] & 0x0f) as usize;
-            let message_type = (buf[0] >> 4) & 0x03;
-            let code = buf[1];
-            if message_type == 2 && code == 0 && tkl == 0 {
-                continue;
+            let deadline = Instant::now() + timeout;
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                self.stream
+                    .get_mut()
+                    .0
+                    .set_read_timeout(Some(remaining))
+                    .map_err(|_| {
+                        Error::new("network_error", "Could not configure OCF receive timeout")
+                    })?;
+                let n = match self.stream.read(&mut buf) {
+                    Ok(n) => n,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        break;
+                    }
+                    Err(_) => {
+                        return Err(Error::new(
+                            "network_error",
+                            "The local OCF connection was interrupted",
+                        ));
+                    }
+                };
+                if n < 4 {
+                    continue;
+                }
+                let tkl = (buf[0] & 0x0f) as usize;
+                let message_type = (buf[0] >> 4) & 0x03;
+                let code = buf[1];
+                if message_type == 2 && code == 0 && tkl == 0 {
+                    if u16::from_be_bytes([buf[2], buf[3]]) == message_id {
+                        acknowledged = true;
+                    }
+                    continue;
+                }
+                if message_type == 0 {
+                    self.ack_confirmable(&buf[..n])?;
+                }
+                if n < 4 + tkl || tkl == 0 || buf.get(4) != Some(&token) {
+                    continue;
+                }
+                return decode_packet(&buf[..n]);
             }
-            if message_type == 0 {
-                self.ack_confirmable(&buf[..n])?;
-            }
-            if n < 4 + tkl || tkl == 0 || buf.get(4) != Some(&token) {
-                continue;
-            }
-            return decode_packet(&buf[..n]);
+            ack_timeout_ms = ack_timeout_ms.saturating_mul(2);
         }
         Err(Error::new(
-            "invalid_response",
-            "The appliance returned no matching OCF response",
+            "timeout",
+            "The appliance did not answer the local OCF request after retransmissions",
         ))
     }
 
@@ -563,6 +586,12 @@ impl Appliance {
             .find_samsung_href(&["temperature", "desired"])
             .or_else(|| self.find_samsung_href(&["temperatures"]));
         let ambient_href = self.find_samsung_href(&["temperature", "current"]);
+        let humidity_href = self
+            .find_samsung_href(&["humidity"])
+            .or_else(|| self.find_resource_href(&["humidity"]));
+        let energy_href = self
+            .find_samsung_href(&["energy", "consumption"])
+            .or_else(|| self.find_resource_href(&["energy", "consumption"]));
         let mode_href = self.find_mode_href();
         let fan_href = self.find_samsung_href(&["wind", "strength"]);
         let windfree_href = self.find_samsung_href(&["mode", "convenient"]);
@@ -571,6 +600,8 @@ impl Appliance {
             power_href.as_deref(),
             set_temp_href.as_deref(),
             ambient_href.as_deref(),
+            humidity_href.as_deref(),
+            energy_href.as_deref(),
             mode_href.as_deref(),
             fan_href.as_deref(),
             windfree_href.as_deref(),
@@ -601,6 +632,14 @@ impl Appliance {
                     }
                     if Some(href) == ambient_href.as_deref() {
                         snapshot.ambient_temperature = number(&value, "temperature");
+                    }
+                    if Some(href) == humidity_href.as_deref() {
+                        snapshot.humidity = humidity_value(&value);
+                    }
+                    if Some(href) == energy_href.as_deref() {
+                        let values = energy_values(&value);
+                        snapshot.instantaneous_power_w = values.0;
+                        snapshot.cumulative_energy_wh = values.1;
                     }
                     if Some(href) == mode_href.as_deref() {
                         if let Some(modes) = get(&value, "modes") {
@@ -884,6 +923,25 @@ impl Appliance {
         self.resource_catalog
             .iter()
             .find(|link| is_samsung_resource(link) && link_matches(link, fragments))
+            .map(|link| link.href.clone())
+    }
+
+    fn find_resource_href(&self, fragments: &[&str]) -> Option<String> {
+        self.resource_catalog
+            .iter()
+            .find(|link| {
+                let matches_all = |value: &str| {
+                    let value = value.to_ascii_lowercase();
+                    fragments
+                        .iter()
+                        .all(|fragment| value.contains(&fragment.to_ascii_lowercase()))
+                };
+                matches_all(&link.href)
+                    || link
+                        .resource_types
+                        .iter()
+                        .any(|resource_type| matches_all(resource_type))
+            })
             .map(|link| link.href.clone())
     }
 
@@ -1541,6 +1599,46 @@ fn add_tree_representations(tree: &Value, output: &mut JsonMap<String, JsonValue
     }
 }
 
+fn sensor_item(value: &Value) -> &Value {
+    get(value, "items")
+        .and_then(as_array)
+        .and_then(|items| items.first())
+        .unwrap_or(value)
+}
+
+fn humidity_value(value: &Value) -> Option<f64> {
+    ["humidity", "relativeHumidity", "value"]
+        .iter()
+        .find_map(|key| number(sensor_item(value), key))
+        .filter(|humidity| humidity.is_finite() && (0.0..=100.0).contains(humidity))
+}
+
+fn energy_values(value: &Value) -> (Option<f64>, Option<f64>) {
+    let item = sensor_item(value);
+    let watts = number(item, "instantaneousPower")
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .and_then(|value| {
+            match text(item, "instantaneousPowerUnit")?
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "w" | "watt" | "watts" => Some(value),
+                "kw" | "kilowatt" | "kilowatts" => Some(value * 1_000.0),
+                _ => None,
+            }
+        });
+    let watt_hours = number(item, "cumulativePower")
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .and_then(
+            |value| match text(item, "cumulativeUnit")?.to_ascii_lowercase().as_str() {
+                "wh" | "watt-hour" | "watt-hours" => Some(value),
+                "kwh" | "kilowatt-hour" | "kilowatt-hours" => Some(value * 1_000.0),
+                _ => None,
+            },
+        );
+    (watts, watt_hours)
+}
+
 fn read_snapshot_from_tree(tree: &Value, snapshot: &mut Snapshot) {
     if let Some(rep) = tree_resource(tree, "/power/vs/0") {
         snapshot.power = text(rep, "power").and_then(|v| match v.as_str() {
@@ -1561,6 +1659,18 @@ fn read_snapshot_from_tree(tree: &Value, snapshot: &mut Snapshot) {
     snapshot.ambient_temperature = snapshot.ambient_temperature.or_else(|| {
         tree_resource(tree, "/temperature/current/0").and_then(|v| number(v, "temperature"))
     });
+    snapshot.humidity = snapshot.humidity.or_else(|| {
+        tree_resource(tree, "/humidity/vs/0")
+            .or_else(|| tree_resource(tree, "/humidity/0"))
+            .and_then(humidity_value)
+    });
+    if snapshot.instantaneous_power_w.is_none() || snapshot.cumulative_energy_wh.is_none() {
+        if let Some(value) = tree_resource(tree, "/energy/consumption/vs/0") {
+            let (watts, watt_hours) = energy_values(value);
+            snapshot.instantaneous_power_w = snapshot.instantaneous_power_w.or(watts);
+            snapshot.cumulative_energy_wh = snapshot.cumulative_energy_wh.or(watt_hours);
+        }
+    }
     if let Some(rep) = tree_resource(tree, "/mode/vs/0") {
         snapshot.mode = get(rep, "modes")
             .and_then(as_array)

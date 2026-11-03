@@ -73,9 +73,9 @@ class _WindfullDesktopHostState extends State<WindfullDesktopHost>
     await trayManager.setContextMenu(
       Menu(
         items: [
-          MenuItem(key: 'show_window', label: 'Abrir WindFull'),
+          MenuItem(key: 'show_window', label: 'Abrir'),
           MenuItem.separator(),
-          MenuItem(key: 'exit_app', label: 'Sair do WindFull'),
+          MenuItem(key: 'exit_app', label: 'Fechar'),
         ],
       ),
     );

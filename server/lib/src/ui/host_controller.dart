@@ -74,6 +74,9 @@ class ApplianceState {
     this.isPoweredOn,
     this.targetTemperature,
     this.roomTemperature,
+    this.humidity,
+    this.instantaneousPowerW,
+    this.cumulativeEnergyWh,
     this.minimumTemperature,
     this.maximumTemperature,
     this.temperatureStep,
@@ -90,6 +93,9 @@ class ApplianceState {
   final bool? isPoweredOn;
   final double? targetTemperature;
   final double? roomTemperature;
+  final double? humidity;
+  final double? instantaneousPowerW;
+  final double? cumulativeEnergyWh;
   final double? minimumTemperature;
   final double? maximumTemperature;
   final double? temperatureStep;

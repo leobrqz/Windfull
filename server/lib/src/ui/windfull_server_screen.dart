@@ -145,23 +145,10 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
               _settingsTab = 0;
             }),
           ),
-          TextButton.icon(
+          _HeaderButton(
+            icon: Icons.minimize_rounded,
+            tooltip: 'Minimizar',
             onPressed: widget.onMinimize,
-            icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 16),
-            label: const Text('Ocultar'),
-            style: TextButton.styleFrom(
-              foregroundColor: WindfullTheme.text,
-              backgroundColor: WindfullTheme.surface,
-              minimumSize: const Size(0, 34),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              textStyle: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(11),
-              ),
-            ),
           ),
         ],
       ),
@@ -173,6 +160,19 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
     final connected =
         state.applianceConnection == ApplianceConnectionStatus.connected &&
         appliance != null;
+    final hasApplianceData =
+        appliance != null &&
+        (appliance.isPoweredOn != null ||
+            appliance.targetTemperature != null ||
+            appliance.roomTemperature != null ||
+            appliance.humidity != null ||
+            appliance.instantaneousPowerW != null ||
+            appliance.cumulativeEnergyWh != null ||
+            appliance.mode != null ||
+            appliance.fanSpeed != null ||
+            appliance.supportedModes.isNotEmpty ||
+            appliance.fanSpeeds.isNotEmpty ||
+            appliance.features.isNotEmpty);
     final temp = appliance?.targetTemperature;
     final minTemp = appliance?.minimumTemperature;
     final maxTemp = appliance?.maximumTemperature;
@@ -211,6 +211,29 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
         powerSupported &&
         !state.busyActions.contains('power');
     final windFree = appliance?.features['windFree'];
+    final telemetry = <Widget>[
+      if (appliance?.roomTemperature != null)
+        _MetricChip(
+          icon: Icons.thermostat_rounded,
+          label: 'Amb. ${_formatTemp(appliance!.roomTemperature!)}°',
+        ),
+      if (appliance?.humidity != null)
+        _MetricChip(
+          icon: Icons.water_drop_outlined,
+          label: 'UR ${appliance!.humidity!.toStringAsFixed(0)}%',
+        ),
+      if (appliance?.instantaneousPowerW != null)
+        _MetricChip(
+          icon: Icons.bolt_rounded,
+          label: 'Pot. ${appliance!.instantaneousPowerW!.toStringAsFixed(0)} W',
+        ),
+      if (appliance?.cumulativeEnergyWh != null)
+        _MetricChip(
+          icon: Icons.electric_bolt_rounded,
+          label:
+              'Total ${(appliance!.cumulativeEnergyWh! / 1000).toStringAsFixed(2).replaceAll('.', ',')} kWh',
+        ),
+    ];
 
     return SingleChildScrollView(
       key: const ValueKey('controls'),
@@ -231,6 +254,20 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
               child: _InlineNotice(
                 icon: Icons.info_outline_rounded,
                 message: _friendlyError(state.applianceError),
+                action: 'Ajustes',
+                onAction: () => setState(() {
+                  _settingsOpen = true;
+                  _settingsTab = 0;
+                }),
+              ),
+            ),
+          if (connected && !hasApplianceData)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _InlineNotice(
+                icon: Icons.sensors_off_rounded,
+                message:
+                    'A rede alcan\u00e7a o aparelho, mas ele ainda n\u00e3o retornou dados compat\u00edveis. Confira a conex\u00e3o ou o suporte a este modelo.',
                 action: 'Ajustes',
                 onAction: () => setState(() {
                   _settingsOpen = true;
@@ -288,6 +325,10 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
             ],
           ),
           const SizedBox(height: 4),
+          if (telemetry.isNotEmpty) ...[
+            Wrap(spacing: 6, runSpacing: 6, children: telemetry),
+            const SizedBox(height: 5),
+          ],
           const _AirConditionerIllustration(),
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -505,14 +546,6 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
                   ),
                 ),
               ),
-              if (appliance?.roomTemperature != null)
-                Text(
-                  'Ambiente ${_formatTemp(appliance!.roomTemperature!)}°',
-                  style: const TextStyle(
-                    color: WindfullTheme.muted,
-                    fontSize: 10,
-                  ),
-                ),
               if (state.status == HostStatus.error)
                 IconButton(
                   tooltip: 'Tentar novamente',
@@ -1029,6 +1062,33 @@ class _HeaderButton extends StatelessWidget {
     visualDensity: VisualDensity.compact,
     onPressed: onPressed,
     icon: Icon(icon, size: 18),
+  );
+}
+
+class _MetricChip extends StatelessWidget {
+  const _MetricChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+    decoration: BoxDecoration(
+      color: WindfullTheme.surface,
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 11, color: WindfullTheme.accent),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: const TextStyle(color: WindfullTheme.muted, fontSize: 9),
+        ),
+      ],
+    ),
   );
 }
 
