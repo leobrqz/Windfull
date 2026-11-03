@@ -82,4 +82,8 @@ cargo test --locked --manifest-path server/native/samsung/Cargo.toml
 
 For protocol and device integration details, see [`server/native/samsung/README.md`](server/native/samsung/README.md).
 
+## References
+
+- [SmartThings CLI](https://github.com/SmartThingsCommunity/smartthings-cli) — command-line interface for SmartThings APIs.
+
 Licensed under the [GNU General Public License v3.0 or later](LICENSE).
