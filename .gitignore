@@ -1,0 +1,25 @@
+# Local agent configuration, release notes and verification scratch space.
+/.codex/
+
+# Generated packages and tool output.
+/output/
+**/.dart_tool/
+**/build/
+**/coverage/
+**/.flutter-plugins-dependencies
+
+# Local credentials, Android signing keys and configuration.
+/app/android/key.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+.env
+.env.*
+
+# Editor and OS files.
+.idea/
+*.iml
+*.log
+Thumbs.db
+.DS_Store

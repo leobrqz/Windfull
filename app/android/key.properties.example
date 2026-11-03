@@ -1,0 +1,6 @@
+# Copy to key.properties and use your own persistent signing key.
+# Java properties accept forward slashes in absolute Windows paths.
+storeFile=C:/Users/your-user/.windfull/signing/windfull-release.jks
+storePassword=replace-with-your-keystore-password
+keyAlias=windfull
+keyPassword=replace-with-your-key-password
