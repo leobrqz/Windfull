@@ -261,7 +261,7 @@ impl Appliance {
             .write_all(&message)
             .map_err(|_| Error::new("network_error", "Could not send the local OCF request"))?;
         let mut buf = [0_u8; 16 * 1024];
-        for _ in 0..3 {
+        for _ in 0..5 {
             let n = self.stream.read(&mut buf).map_err(|_| {
                 Error::new(
                     "timeout",
@@ -272,6 +272,14 @@ impl Appliance {
                 continue;
             }
             let tkl = (buf[0] & 0x0f) as usize;
+            let message_type = (buf[0] >> 4) & 0x03;
+            let code = buf[1];
+            if message_type == 2 && code == 0 && tkl == 0 {
+                continue;
+            }
+            if message_type == 0 {
+                self.ack_confirmable(&buf[..n])?;
+            }
             if n < 4 + tkl || tkl == 0 || buf.get(4) != Some(&token) {
                 continue;
             }
@@ -409,7 +417,7 @@ impl Appliance {
             .write_all(&message)
             .map_err(|_| Error::new("network_error", "Could not send the local OCF request"))?;
         let mut buf = [0_u8; 16 * 1024];
-        for _ in 0..3 {
+        for _ in 0..5 {
             let n = self.stream.read(&mut buf).map_err(|_| {
                 Error::new(
                     "timeout",
@@ -420,6 +428,14 @@ impl Appliance {
                 continue;
             }
             let tkl = (buf[0] & 0x0f) as usize;
+            let message_type = (buf[0] >> 4) & 0x03;
+            let code = buf[1];
+            if message_type == 2 && code == 0 && tkl == 0 {
+                continue;
+            }
+            if message_type == 0 {
+                self.ack_confirmable(&buf[..n])?;
+            }
             if n < 4 + tkl || tkl == 0 || buf.get(4) != Some(&token) {
                 continue;
             }
@@ -429,6 +445,19 @@ impl Appliance {
             "invalid_response",
             "The appliance returned no matching OCF response",
         ))
+    }
+
+    fn ack_confirmable(&mut self, packet: &[u8]) -> Result<(), Error> {
+        if packet.len() < 4 || packet[0] >> 6 != 1 || (packet[0] >> 4) & 0x03 != 0 {
+            return Ok(());
+        }
+        let ack = empty_ack(u16::from_be_bytes([packet[2], packet[3]]));
+        self.stream.write_all(&ack).map_err(|_| {
+            Error::new(
+                "network_error",
+                "Could not acknowledge a local OCF response",
+            )
+        })
     }
 
     fn post(&mut self, path: &str, payload: Value) -> Result<(), Error> {
@@ -660,12 +689,22 @@ impl Appliance {
             .and_then(|tree| tree_resource(tree, "/wind/strength/vs/0"))
             .map(|r| text_array(r, "supportedModes"))
             .filter(|v| !v.is_empty());
+        let tree_modes = tree_data
+            .as_ref()
+            .and_then(|tree| tree_resource(tree, "/mode/vs/0"))
+            .map(|r| text_array(r, "supportedModes"))
+            .filter(|v| !v.is_empty());
+        let tree_windfree = tree_data
+            .as_ref()
+            .and_then(|tree| tree_resource(tree, "/mode/convenient/vs/0"))
+            .map(|r| text_array(r, "supportedModes"))
+            .filter(|v| !v.is_empty());
         Ok(json!({
             "power": self.find_actuator_href(&["power"]).is_some() || tree_data.as_ref().is_some_and(|tree| tree_resource(tree, "/power/vs/0").is_some()),
             "temperature": self.find_actuator_href(&["temperature", "desired"]).as_deref().map(|href| temperature_capability(&resources, Some(href))).or(tree_temp_caps).unwrap_or(json!({"available": false, "minimum": null, "maximum": null, "step": null})),
-            "modes": self.find_actuator_mode_href().as_deref().map(|href| modes_capability(&resources, Some(href))).filter(|v| !v.is_null()).unwrap_or(JsonValue::Null),
+            "modes": self.find_actuator_mode_href().as_deref().map(|href| modes_capability(&resources, Some(href))).filter(|v| !v.is_null()).or_else(|| tree_modes.map(|v| json!(v.into_iter().filter(|m| ["Cool", "Dry", "Wind", "Auto", "Heat"].contains(&m.as_str())).collect::<Vec<_>>()))).unwrap_or(JsonValue::Null),
             "fanSpeeds": self.find_actuator_href(&["wind", "strength"]).as_deref().map(|href| fan_capability(&resources, Some(href))).filter(|v| !v.is_null()).or_else(|| tree_fans.map(|v| json!(v.into_iter().filter(|m| ["0", "1", "2", "3", "4"].contains(&m.as_str())).collect::<Vec<_>>()))).unwrap_or(JsonValue::Null),
-            "windFree": self.find_actuator_href(&["mode", "convenient"]).as_deref().and_then(|href| windfree_capability(&resources, Some(href))),
+            "windFree": self.find_actuator_href(&["mode", "convenient"]).as_deref().and_then(|href| windfree_capability(&resources, Some(href))).or_else(|| tree_windfree.map(|v| v.iter().any(|m| m == "Nano" || m == "NanoSleep"))),
             "resourceCatalog": self.resource_catalog.iter().map(|link| json!({"href":link.href,"resourceTypes":link.resource_types,"interfaces":link.interfaces})).collect::<Vec<_>>(),
             "rawResources": resources
         }))
@@ -1002,6 +1041,10 @@ impl Appliance {
             .find_map(|key| get(value, key).and_then(as_number));
         Ok((minimum, maximum, step))
     }
+}
+
+fn empty_ack(message_id: u16) -> [u8; 4] {
+    [0x60, 0x00, (message_id >> 8) as u8, message_id as u8]
 }
 
 fn ensure_identity(dir: &Path) -> Result<(String, String), Error> {
@@ -2015,6 +2058,11 @@ mod tests {
                 b'o', b'w', b'e', b'r', 0x62, b'O', b'n',
             ]
         );
+    }
+
+    #[test]
+    fn empty_ack_uses_the_confirmable_response_message_id() {
+        assert_eq!(empty_ack(0x1234), [0x60, 0x00, 0x12, 0x34]);
     }
 
     #[test]
