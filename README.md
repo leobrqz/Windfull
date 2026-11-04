@@ -39,7 +39,7 @@ The air conditioner must be onboarded in Samsung SmartThings once to provision l
 
 ## Build and develop
 
-Install Flutter 3.44.1 and the Android SDK for the client. Windows builds also require Visual Studio Build Tools with the **Desktop development with C++** workload and Windows SDK, Rust stable for the MSVC target, and Strawberry Perl for the OpenSSL bridge build. The Windows build script detects common Strawberry Perl installations or accepts `-PerlBin`.
+Install Flutter 3.44.1 and the Android SDK for the client. Windows builds also require Node.js/npm, Rust stable for the MSVC target, Visual Studio Build Tools with the **Desktop development with C++** workload and Windows SDK, Strawberry Perl for the OpenSSL bridge build, and the .NET 8 SDK for Velopack packaging. The Windows build script detects common Strawberry Perl installations or accepts `-PerlBin`.
 
 Build the Windows package from the repository root:
 
@@ -56,26 +56,34 @@ flutter pub get
 flutter run
 ```
 
-Run the Windows host from source:
+Run the Tauri tray host from source:
 
 ```powershell
-cargo build --locked --manifest-path server/native/samsung/Cargo.toml
-cd server
-flutter run -d windows
+Push-Location server
+npm --prefix web ci
+npx --prefix web --no-install tauri dev --config src-tauri\tauri.conf.json
+Pop-Location
 ```
 
-Run `flutter analyze` and `flutter test` from each of `app/` and `server/`. Run Rust bridge tests with:
+The host uses Rust for its tray lifecycle, local HTTPS API and Windows storage, and React/TypeScript for its compact panel. Run the host checks and build the Samsung bridge with:
 
 ```powershell
+cargo check --locked --manifest-path server/src-tauri/Cargo.toml
+npm --prefix server/web ci
+npm --prefix server/web run build
+cargo build --locked --manifest-path server/native/samsung/Cargo.toml
 cargo test --locked --manifest-path server/native/samsung/Cargo.toml
 ```
+
+Run `flutter analyze` from `app/` to check the Android client.
 
 ## Repository
 
 | Path | Purpose |
 | --- | --- |
 | `app/` | Flutter Android client: discovery, pairing, device state and controls |
-| `server/` | Windows tray host, local HTTPS API and device approval |
+| `server/src-tauri/` | Tauri/Rust Windows tray host, local HTTPS API, secure storage and device approval |
+| `server/web/` | React/TypeScript interface for the Windows tray panel |
 | `server/native/samsung/` | Rust OCF/CoAP/DTLS bridge for Samsung air conditioners |
 | `scripts/` | Windows and Android build and verification scripts |
 | `docs/releasing.md` | Release build and verification workflow |

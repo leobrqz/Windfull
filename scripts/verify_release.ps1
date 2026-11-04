@@ -16,6 +16,12 @@ function Read-Version([string]$Path) {
     }
 }
 
+function Read-Cargo-Version([string]$Path) {
+    $match = [regex]::Match([IO.File]::ReadAllText($Path), '(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$')
+    if (-not $match.Success) { throw "Invalid Tauri host package version: $Path" }
+    return "$($match.Groups[1].Value).$($match.Groups[2].Value).$($match.Groups[3].Value)"
+}
+
 function Read-Checksums([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Checksum file missing: $Path" }
     $entries = @{}
@@ -51,9 +57,13 @@ function Get-ZipEntryText([IO.Compression.ZipArchive]$Archive, [string]$Name) {
 }
 
 $appVersion = Read-Version (Join-Path $root 'app\pubspec.yaml')
-$serverVersion = Read-Version (Join-Path $root 'server\pubspec.yaml')
-if ($appVersion.Name -cne $serverVersion.Name -or $appVersion.Build -ne $serverVersion.Build) {
-    throw 'Android and Windows versions/build numbers must match.'
+$serverVersion = Read-Cargo-Version (Join-Path $root 'server\src-tauri\Cargo.toml')
+if ($appVersion.Name -cne $serverVersion) { throw 'Android release version and Tauri host version must match.' }
+$tauriConfigPath = Join-Path $root 'server\src-tauri\tauri.conf.json'
+if (-not (Test-Path -LiteralPath $tauriConfigPath -PathType Leaf)) { throw 'Tauri Windows configuration is missing.' }
+$tauriConfig = Get-Content -Raw -LiteralPath $tauriConfigPath | ConvertFrom-Json
+if ($tauriConfig.productName -cne 'WindFull' -or $tauriConfig.identifier -cne 'io.github.leobrqz.windfull.windows') {
+    throw 'Tauri product identity does not match the Windows release package.'
 }
 
 $androidDirectory = Join-Path $root 'output\android'
@@ -62,7 +72,7 @@ $apk = Join-Path $androidDirectory 'Windfull-Android-universal-release.apk'
 $catalog = Join-Path $androidDirectory 'android-update.json'
 $portable = Join-Path $windowsDirectory 'Windfull-Windows-x64.zip'
 $packageId = 'io.github.leobrqz.windfull.windows'
-$fullPackage = Join-Path $windowsDirectory "$packageId-$($serverVersion.Name)-win-x64-full.nupkg"
+$fullPackage = Join-Path $windowsDirectory "$packageId-$serverVersion-win-x64-full.nupkg"
 $feedPath = Join-Path $windowsDirectory 'releases.win-x64.json'
 
 $androidChecksums = Read-Checksums (Join-Path $androidDirectory 'SHA256SUMS.txt')
@@ -135,7 +145,7 @@ $feed = Get-Content -Raw -LiteralPath $feedPath | ConvertFrom-Json
 $fullAssets = @($feed.Assets | Where-Object { $_.Type -eq 'Full' })
 if ($fullAssets.Count -ne 1) { throw 'Windows feed must contain exactly one full package.' }
 $asset = $fullAssets[0]
-if ($asset.PackageId -cne $packageId -or $asset.Version -cne $serverVersion.Name -or
+if ($asset.PackageId -cne $packageId -or $asset.Version -cne $serverVersion -or
     $asset.FileName -cne (Split-Path -Leaf $fullPackage) -or
     [long]$asset.Size -ne (Get-Item -LiteralPath $fullPackage).Length -or
     $asset.SHA256 -cne (Get-FileHash -LiteralPath $fullPackage -Algorithm SHA256).Hash -or
@@ -149,14 +159,14 @@ try {
     $manifest = [xml](Get-ZipEntryText $portableZip 'current/sq.version')
     $packageManifest = [xml](Get-ZipEntryText $packageZip "$packageId.nuspec")
     foreach ($metadata in @($manifest.package.metadata, $packageManifest.package.metadata)) {
-        if ($metadata.id -cne $packageId -or $metadata.version -cne $serverVersion.Name -or $metadata.channel -cne 'win-x64') {
+        if ($metadata.id -cne $packageId -or $metadata.version -cne $serverVersion -or $metadata.channel -cne 'win-x64') {
             throw 'Portable/full package metadata does not match this release.'
         }
     }
-    foreach ($entry in @('Update.exe', 'current/windfull_server.exe', 'current/windfull-samsung-ocf.exe',
-                          'current/velopack_libc.dll', 'current/LICENSE.velopack')) {
+    foreach ($entry in @('Update.exe', 'current/windfull_server.exe', 'current/windfull-samsung-ocf.exe', 'current/LICENSE.velopack')) {
         if (-not $portableZip.GetEntry($entry)) { throw "Managed Windows package is missing: $entry" }
     }
+    if (-not $packageZip.GetEntry('lib/app/LICENSE.velopack')) { throw 'Full Windows update package is missing the Velopack MIT license notice.' }
     $launcher = @($portableZip.Entries | Where-Object { $_.FullName -match '^[^/\\]+\.exe$' -and $_.Name -ne 'Update.exe' })
     if ($launcher.Count -ne 1) { throw 'Managed portable ZIP must contain exactly one root application launcher.' }
     $binaryEntry = $portableZip.GetEntry('current/windfull_server.exe')
@@ -166,11 +176,11 @@ try {
         $outputStream = [IO.File]::Open($temporaryExe, [IO.FileMode]::Create)
         try { $input.CopyTo($outputStream) } finally { $input.Dispose(); $outputStream.Dispose() }
         $binaryVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($temporaryExe)
-        if ($binaryVersion.FileMajorPart -ne $serverVersion.Major -or
-            $binaryVersion.FileMinorPart -ne $serverVersion.Minor -or
-            $binaryVersion.FileBuildPart -ne $serverVersion.Patch -or
-            $binaryVersion.FilePrivatePart -ne $serverVersion.Build) {
-            throw 'Windows executable version/build does not match the manifests.'
+        $hostParts = $serverVersion.Split('.') | ForEach-Object { [int]$_ }
+        if ($binaryVersion.FileMajorPart -ne $hostParts[0] -or
+            $binaryVersion.FileMinorPart -ne $hostParts[1] -or
+            $binaryVersion.FileBuildPart -ne $hostParts[2]) {
+            throw 'Tauri Windows executable version does not match server/src-tauri/Cargo.toml.'
         }
     }
     finally { Remove-Item -LiteralPath $temporaryExe -Force }
@@ -187,5 +197,5 @@ $releaseChecksums = foreach ($file in $releaseFiles) {
     "$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash)  $(Split-Path -Leaf $file)"
 }
 Set-Content -LiteralPath (Join-Path $releaseDirectory 'SHA256SUMS.txt') -Value $releaseChecksums -Encoding ascii
-Write-Output "Verified v$($serverVersion.Name)+$($serverVersion.Build); Android signer SHA-256: $signer"
+Write-Output "Verified v$serverVersion (Android build $($appVersion.Build)); Android signer SHA-256: $signer"
 Write-Output "Release manifest: $(Join-Path $releaseDirectory 'SHA256SUMS.txt')"

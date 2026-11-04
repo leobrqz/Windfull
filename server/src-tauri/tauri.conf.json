@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "WindFull",
+  "version": "0.1.1",
+  "identifier": "io.github.leobrqz.windfull.windows",
+  "build": {
+    "beforeDevCommand": "npm run dev -- --host 127.0.0.1",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "WindFull",
+        "width": 390,
+        "height": 630,
+        "minWidth": 350,
+        "minHeight": 500,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "shadow": false
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/windfull.ico"],
+    "shortDescription": "Controle local para Samsung WindFree",
+    "longDescription": "Aplicativo de bandeja WindFull com API local segura para Android.",
+    "resources": {
+      "../native/samsung/target/release/windfull-samsung-ocf.exe": "windfull-samsung-ocf.exe"
+    },
+    "windows": { "nsis": { "installMode": "currentUser" } }
+  }
+}

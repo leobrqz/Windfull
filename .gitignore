@@ -7,6 +7,7 @@
 **/build/
 **/coverage/
 **/.flutter-plugins-dependencies
+**/target/
 
 # Local credentials, Android signing keys and configuration.
 /app/android/key.properties
