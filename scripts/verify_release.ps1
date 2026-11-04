@@ -1,16 +1,12 @@
-param(
-    [switch]$AllowDebugSigning,
-    [string]$PreviousApk
-)
+param([string]$PreviousApk)
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
-function Read-ProductVersion([string]$Path) {
-    $content = [IO.File]::ReadAllText($Path)
-    $match = [regex]::Match($content, '(?m)^version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)\s*$')
-    if (-not $match.Success) { throw "Invalid product version in $Path" }
+function Read-Version([string]$Path) {
+    $match = [regex]::Match([IO.File]::ReadAllText($Path), '(?m)^version:\s*(\d+)\.(\d+)\.(\d+)\+(\d+)\s*$')
+    if (-not $match.Success) { throw "Invalid product version: $Path" }
     return @{
         Name = "$($match.Groups[1].Value).$($match.Groups[2].Value).$($match.Groups[3].Value)"
         Major = [int]$match.Groups[1].Value
@@ -20,94 +16,176 @@ function Read-ProductVersion([string]$Path) {
     }
 }
 
-function Assert-Checksum([string]$Artifact, [string]$ChecksumFile) {
-    $line = [IO.File]::ReadAllText($ChecksumFile).Trim()
-    $match = [regex]::Match($line, '^([A-Fa-f0-9]{64})  ([^/\\\r\n]+)$')
-    if (-not $match.Success -or $match.Groups[2].Value -cne (Split-Path -Leaf $Artifact)) {
-        throw "Invalid checksum file: $ChecksumFile"
+function Read-Checksums([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Checksum file missing: $Path" }
+    $entries = @{}
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -notmatch '^([A-Fa-f0-9]{64})  ([^/\\\r\n]+)$') { throw "Invalid checksum line: $Path" }
+        $name = $Matches[2]
+        if ($entries.ContainsKey($name)) { throw "Duplicate checksum for $name" }
+        $entries[$name] = $Matches[1].ToLowerInvariant()
     }
-    if ((Get-FileHash -LiteralPath $Artifact -Algorithm SHA256).Hash -ne $match.Groups[1].Value) {
-        throw "Checksum mismatch: $Artifact"
-    }
+    return $entries
+}
+
+function Assert-Checksum([string]$File, [hashtable]$Entries) {
+    $name = Split-Path -Leaf $File
+    if (-not $Entries.ContainsKey($name)) { throw "Checksum missing for $name" }
+    $actual = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -cne $Entries[$name]) { throw "Checksum mismatch: $name" }
 }
 
 function Get-ApkSigner([string]$Apk, [string]$SignerTool) {
     $output = & $SignerTool verify --print-certs $Apk
     if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed: $Apk" }
     $matches = [regex]::Matches(($output -join [Environment]::NewLine), 'certificate SHA-256 digest:\s*([A-Fa-f0-9]{64})')
-    if ($matches.Count -ne 1) { throw "Expected exactly one APK signing certificate: $Apk" }
+    if ($matches.Count -ne 1) { throw "Expected one APK signing certificate: $Apk" }
     return $matches[0].Groups[1].Value.ToLowerInvariant()
 }
 
-$appVersion = Read-ProductVersion (Join-Path $root 'app\pubspec.yaml')
-$serverVersion = Read-ProductVersion (Join-Path $root 'server\pubspec.yaml')
-if ($appVersion.Name -ne $serverVersion.Name -or $appVersion.Build -ne $serverVersion.Build) {
-    throw 'Android and Windows product versions and build numbers must match.'
-}
-if (-not $AllowDebugSigning -and -not (Test-Path -LiteralPath (Join-Path $root 'app\android\key.properties'))) {
-    throw 'Release signing configuration is missing. Use -AllowDebugSigning only for local tests.'
+function Get-ZipEntryText([IO.Compression.ZipArchive]$Archive, [string]$Name) {
+    $entry = $Archive.GetEntry($Name)
+    if (-not $entry) { throw "Missing archive entry: $Name" }
+    $reader = [IO.StreamReader]::new($entry.Open())
+    try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
 }
 
-$apk = Join-Path $root 'output\android\Windfull-Android-universal-release.apk'
-$archive = Join-Path $root 'output\windows\Windfull-Windows-x64.zip'
-Assert-Checksum $apk (Join-Path $root 'output\android\SHA256SUMS.txt')
-Assert-Checksum $archive (Join-Path $root 'output\windows\SHA256SUMS.txt')
+$appVersion = Read-Version (Join-Path $root 'app\pubspec.yaml')
+$serverVersion = Read-Version (Join-Path $root 'server\pubspec.yaml')
+if ($appVersion.Name -cne $serverVersion.Name -or $appVersion.Build -ne $serverVersion.Build) {
+    throw 'Android and Windows versions/build numbers must match.'
+}
 
-$properties = Join-Path $root 'app\android\local.properties'
-$sdkLine = Get-Content -LiteralPath $properties | Where-Object { $_ -match '^sdk\.dir=' } | Select-Object -First 1
-if (-not $sdkLine) { throw 'Android SDK location is missing from app/android/local.properties.' }
+$androidDirectory = Join-Path $root 'output\android'
+$windowsDirectory = Join-Path $root 'output\windows'
+$apk = Join-Path $androidDirectory 'Windfull-Android-universal-release.apk'
+$catalog = Join-Path $androidDirectory 'android-update.json'
+$portable = Join-Path $windowsDirectory 'Windfull-Windows-x64.zip'
+$packageId = 'io.github.leobrqz.windfull.windows'
+$fullPackage = Join-Path $windowsDirectory "$packageId-$($serverVersion.Name)-win-x64-full.nupkg"
+$feedPath = Join-Path $windowsDirectory 'releases.win-x64.json'
+
+$androidChecksums = Read-Checksums (Join-Path $androidDirectory 'SHA256SUMS.txt')
+$windowsChecksums = Read-Checksums (Join-Path $windowsDirectory 'SHA256SUMS.txt')
+foreach ($file in @($apk, $catalog)) { Assert-Checksum $file $androidChecksums }
+foreach ($file in @($portable, $fullPackage, $feedPath)) { Assert-Checksum $file $windowsChecksums }
+if ($androidChecksums.Count -ne 2 -or $windowsChecksums.Count -ne 3) {
+    throw 'Build checksum files contain unexpected artifacts.'
+}
+
+$localProperties = Join-Path $root 'app\android\local.properties'
+$sdkLine = Get-Content -LiteralPath $localProperties | Where-Object { $_ -match '^sdk\.dir=' } | Select-Object -First 1
+if (-not $sdkLine) { throw 'Android SDK location is missing.' }
 $sdk = (($sdkLine -replace '^sdk\.dir=', '') -replace '\\\\', '\') -replace '\\:', ':'
 $buildTools = Get-ChildItem -LiteralPath (Join-Path $sdk 'build-tools') -Directory |
     Where-Object { (Test-Path -LiteralPath (Join-Path $_.FullName 'aapt.exe')) -and (Test-Path -LiteralPath (Join-Path $_.FullName 'apksigner.bat')) } |
-    Sort-Object { [version]($_.Name -replace '[^0-9.].*$', '') } -Descending |
-    Select-Object -First 1
-if (-not $buildTools) { throw 'Android build-tools with aapt and apksigner were not found.' }
+    Sort-Object { [version]($_.Name -replace '[^0-9.].*$', '') } -Descending | Select-Object -First 1
+if (-not $buildTools) { throw 'Android build-tools were not found.' }
 
 $badging = & (Join-Path $buildTools.FullName 'aapt.exe') dump badging $apk
-if ($LASTEXITCODE -ne 0) { throw 'Cannot read APK metadata.' }
+if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect Android package metadata.' }
 $packageLine = @($badging | Where-Object { $_ -like 'package:*' }) -join ''
 if ($packageLine -notmatch "name='io.github.leobrqz.windfull_app'" -or
     $packageLine -notmatch "versionName='$([regex]::Escape($appVersion.Name))'" -or
     $packageLine -notmatch "versionCode='$($appVersion.Build)'") {
-    throw 'APK package, version name or build number does not match the project.'
+    throw 'APK package identity/version does not match the manifests.'
 }
+
 $signerTool = Join-Path $buildTools.FullName 'apksigner.bat'
 $signer = Get-ApkSigner $apk $signerTool
 if ($PreviousApk) {
-    $previousSigner = Get-ApkSigner (Resolve-Path -LiteralPath $PreviousApk).Path $signerTool
-    if ($previousSigner -cne $signer) { throw 'APK signing certificate differs from the previous release.' }
+    $previous = (Resolve-Path -LiteralPath $PreviousApk).Path
+    if ((Get-ApkSigner $previous $signerTool) -cne $signer) {
+        throw 'Android signing certificate differs from the previous release.'
+    }
 }
 
-$zip = [IO.Compression.ZipFile]::OpenRead($archive)
+$catalogScript = Join-Path $PSScriptRoot 'android_update_metadata.ps1'
+& $catalogScript -ApkPath $apk -CatalogPath $catalog -Validate | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Android update catalog does not match the APK.' }
+
+$propertyPath = Join-Path $root 'app\android\key.properties'
+if (-not (Test-Path -LiteralPath $propertyPath -PathType Leaf)) { throw 'Persistent Android release signing is not configured.' }
+$properties = @{}
+foreach ($line in Get-Content -LiteralPath $propertyPath) {
+    if ($line -match '^([^#!][^=]*)=(.*)$') { $properties[$Matches[1].Trim()] = $Matches[2].Trim() }
+}
+if (-not $properties.storeFile -or -not $properties.storePassword -or -not $properties.keyAlias) {
+    throw 'Android release signing properties are incomplete.'
+}
+$keystore = [IO.Path]::GetFullPath($properties.storeFile)
+if (-not (Test-Path -LiteralPath $keystore -PathType Leaf)) { throw 'Persistent Android keystore is missing.' }
+$keytool = Join-Path $env:ProgramFiles 'Android\Android Studio\jbr\bin\keytool.exe'
+if (-not (Test-Path -LiteralPath $keytool)) { throw 'Android Studio keytool was not found.' }
+$certificateFile = [IO.Path]::GetTempFileName()
+$env:WINDFULL_VERIFY_STORE_PASSWORD = $properties.storePassword
 try {
-    $entries = @{}
-    foreach ($entry in $zip.Entries) { $entries[$entry.FullName.Replace('\', '/')] = $entry }
-    foreach ($name in @('windfull_server.exe', 'windfull-samsung-ocf.exe', 'flutter_windows.dll', 'data/icudtl.dat', 'data/app.so')) {
-        if (-not $entries.ContainsKey($name)) { throw "Missing Windows bundle file: $name" }
-    }
-    $temporary = [IO.Path]::GetTempFileName()
-    try {
-        $inputStream = $entries['windfull_server.exe'].Open()
-        $outputStream = [IO.File]::Open($temporary, [IO.FileMode]::Create)
-        try { $inputStream.CopyTo($outputStream) }
-        finally { $inputStream.Dispose(); $outputStream.Dispose() }
-        $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($temporary)
-        if ($version.FileMajorPart -ne $serverVersion.Major -or
-            $version.FileMinorPart -ne $serverVersion.Minor -or
-            $version.FileBuildPart -ne $serverVersion.Patch -or
-            $version.FilePrivatePart -ne $serverVersion.Build) {
-            throw 'Windows executable version or build number does not match the project.'
+    & $keytool -exportcert -keystore $keystore -alias $properties.keyAlias `
+        -storepass:env WINDFULL_VERIFY_STORE_PASSWORD -file $certificateFile | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not verify the persistent Android signing certificate.' }
+    $keystoreSigner = (Get-FileHash -LiteralPath $certificateFile -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+finally {
+    Remove-Item Env:WINDFULL_VERIFY_STORE_PASSWORD -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $certificateFile -Force -ErrorAction SilentlyContinue
+}
+if ($signer -cne $keystoreSigner) { throw 'APK was not signed with the configured persistent release key.' }
+
+$feed = Get-Content -Raw -LiteralPath $feedPath | ConvertFrom-Json
+$fullAssets = @($feed.Assets | Where-Object { $_.Type -eq 'Full' })
+if ($fullAssets.Count -ne 1) { throw 'Windows feed must contain exactly one full package.' }
+$asset = $fullAssets[0]
+if ($asset.PackageId -cne $packageId -or $asset.Version -cne $serverVersion.Name -or
+    $asset.FileName -cne (Split-Path -Leaf $fullPackage) -or
+    [long]$asset.Size -ne (Get-Item -LiteralPath $fullPackage).Length -or
+    $asset.SHA256 -cne (Get-FileHash -LiteralPath $fullPackage -Algorithm SHA256).Hash -or
+    $asset.SHA1 -cne (Get-FileHash -LiteralPath $fullPackage -Algorithm SHA1).Hash) {
+    throw 'Windows update feed does not match the full package.'
+}
+
+$portableZip = [IO.Compression.ZipFile]::OpenRead($portable)
+$packageZip = [IO.Compression.ZipFile]::OpenRead($fullPackage)
+try {
+    $manifest = [xml](Get-ZipEntryText $portableZip 'current/sq.version')
+    $packageManifest = [xml](Get-ZipEntryText $packageZip "$packageId.nuspec")
+    foreach ($metadata in @($manifest.package.metadata, $packageManifest.package.metadata)) {
+        if ($metadata.id -cne $packageId -or $metadata.version -cne $serverVersion.Name -or $metadata.channel -cne 'win-x64') {
+            throw 'Portable/full package metadata does not match this release.'
         }
     }
-    finally { Remove-Item -LiteralPath $temporary -Force }
+    foreach ($entry in @('Update.exe', 'current/windfull_server.exe', 'current/windfull-samsung-ocf.exe',
+                          'current/velopack_libc.dll', 'current/LICENSE.velopack')) {
+        if (-not $portableZip.GetEntry($entry)) { throw "Managed Windows package is missing: $entry" }
+    }
+    $launcher = @($portableZip.Entries | Where-Object { $_.FullName -match '^[^/\\]+\.exe$' -and $_.Name -ne 'Update.exe' })
+    if ($launcher.Count -ne 1) { throw 'Managed portable ZIP must contain exactly one root application launcher.' }
+    $binaryEntry = $portableZip.GetEntry('current/windfull_server.exe')
+    $temporaryExe = [IO.Path]::GetTempFileName()
+    try {
+        $input = $binaryEntry.Open()
+        $outputStream = [IO.File]::Open($temporaryExe, [IO.FileMode]::Create)
+        try { $input.CopyTo($outputStream) } finally { $input.Dispose(); $outputStream.Dispose() }
+        $binaryVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($temporaryExe)
+        if ($binaryVersion.FileMajorPart -ne $serverVersion.Major -or
+            $binaryVersion.FileMinorPart -ne $serverVersion.Minor -or
+            $binaryVersion.FileBuildPart -ne $serverVersion.Patch -or
+            $binaryVersion.FilePrivatePart -ne $serverVersion.Build) {
+            throw 'Windows executable version/build does not match the manifests.'
+        }
+    }
+    finally { Remove-Item -LiteralPath $temporaryExe -Force }
 }
-finally { $zip.Dispose() }
+finally {
+    $portableZip.Dispose()
+    $packageZip.Dispose()
+}
 
-$releaseOutput = Join-Path $root 'output\release'
-New-Item -ItemType Directory -Path $releaseOutput -Force | Out-Null
-$checksums = foreach ($artifact in @($apk, $archive)) {
-    "$((Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash)  $(Split-Path -Leaf $artifact)"
+$releaseDirectory = Join-Path $root 'output\release'
+New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+$releaseFiles = @($apk, $catalog, $portable, $fullPackage, $feedPath)
+$releaseChecksums = foreach ($file in $releaseFiles) {
+    "$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash)  $(Split-Path -Leaf $file)"
 }
-Set-Content -LiteralPath (Join-Path $releaseOutput 'SHA256SUMS.txt') -Value $checksums -Encoding ascii
-Write-Output "Verified v$($appVersion.Name)+$($appVersion.Build); Android signer SHA-256: $signer"
-Write-Output "Combined checksums: $(Join-Path $releaseOutput 'SHA256SUMS.txt')"
+Set-Content -LiteralPath (Join-Path $releaseDirectory 'SHA256SUMS.txt') -Value $releaseChecksums -Encoding ascii
+Write-Output "Verified v$($serverVersion.Name)+$($serverVersion.Build); Android signer SHA-256: $signer"
+Write-Output "Release manifest: $(Join-Path $releaseDirectory 'SHA256SUMS.txt')"

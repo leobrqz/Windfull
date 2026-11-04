@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
 import 'package:windfull_server/src/ui/host_controller.dart';
 import 'package:windfull_server/src/ui/windfull_server_screen.dart';
 import 'package:windfull_server/src/ui/windfull_theme.dart';
+import 'package:windfull_server/src/ui/windows_update_controller.dart';
 
 void main() {
   testWidgets('renders only appliance capabilities in a compact panel', (
@@ -133,7 +135,10 @@ void main() {
 
 Widget app(TestHostController controller) => MaterialApp(
   theme: WindfullTheme.build(),
-  home: WindfullServerScreen(controller: controller),
+  home: WindfullServerScreen(
+    controller: controller,
+    updates: WindowsUpdateController(),
+  ),
 );
 
 void setWindow(WidgetTester tester) {

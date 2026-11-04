@@ -5,16 +5,21 @@ import 'package:flutter/material.dart';
 import 'host_controller.dart';
 import 'windfull_brand_mark.dart';
 import 'windfull_theme.dart';
+import 'windows_update_controller.dart';
 
 class WindfullServerScreen extends StatefulWidget {
   const WindfullServerScreen({
     required this.controller,
+    required this.updates,
     this.onMinimize,
+    this.onExitApplication,
     super.key,
   });
 
   final WindfullHostController controller;
+  final WindowsUpdateController updates;
   final VoidCallback? onMinimize;
+  final VoidCallback? onExitApplication;
 
   @override
   State<WindfullServerScreen> createState() => _WindfullServerScreenState();
@@ -562,14 +567,15 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
           ),
           child: Row(
             children: [
-              for (var index = 0; index < 4; index++)
+              for (var index = 0; index < 5; index++)
                 Expanded(
                   child: _TabButton(
                     label: switch (index) {
                       0 => 'Aparelho',
                       1 => 'Celulares',
                       2 => 'Rede',
-                      _ => 'Energia',
+                      3 => 'Energia',
+                      _ => 'Atualizações',
                     },
                     selected: _settingsTab == index,
                     onPressed: () => setState(() => _settingsTab = index),
@@ -586,7 +592,8 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
             0 => _applianceSettings(state),
             1 => _pairingSettings(state),
             2 => _networkSettings(state),
-            _ => _energySettings(state),
+            3 => _energySettings(state),
+            _ => _updateSettings(),
           },
         ),
       ),
@@ -595,6 +602,179 @@ class _WindfullServerScreenState extends State<WindfullServerScreen> {
 
   Widget _energySettings(HostViewState state) =>
       _EnergySettingsPanel(usage: state.energyUsage, onSave: _saveEnergyPrice);
+
+  Widget _updateSettings() => AnimatedBuilder(
+    animation: widget.updates,
+    builder: (context, _) {
+      final update = widget.updates;
+      final active = {
+        WindowsUpdateStatus.checking,
+        WindowsUpdateStatus.downloading,
+        WindowsUpdateStatus.applying,
+      }.contains(update.status);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _SectionLabel(
+            title: 'Atualizações do WindFull',
+            trailing: IconButton(
+              tooltip: 'Verificar agora',
+              onPressed: active || !update.managedInstall ? null : update.check,
+              icon: update.status == WindowsUpdateStatus.checking
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_rounded, size: 18),
+            ),
+          ),
+          _DarkSurface(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _InfoLine(
+                  icon: Icons.system_update_alt_rounded,
+                  title: _updateTitle(update.status),
+                  subtitle: 'Versão instalada ${update.currentVersion}',
+                  trailing: Icon(
+                    update.status == WindowsUpdateStatus.failed
+                        ? Icons.error_outline_rounded
+                        : update.managedInstall
+                        ? Icons.verified_user_outlined
+                        : Icons.info_outline_rounded,
+                    color: update.status == WindowsUpdateStatus.failed
+                        ? const Color(0xFFF0BC70)
+                        : WindfullTheme.accent,
+                    size: 18,
+                  ),
+                ),
+                if (update.status == WindowsUpdateStatus.downloading) ...[
+                  const SizedBox(height: 10),
+                  LinearProgressIndicator(
+                    value: update.progressPercent / 100,
+                    minHeight: 4,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    '${update.progressPercent}%',
+                    style: const TextStyle(
+                      color: WindfullTheme.muted,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+                if (update.errorMessage != null) ...[
+                  const SizedBox(height: 9),
+                  Text(
+                    update.errorMessage!,
+                    style: const TextStyle(
+                      color: Color(0xFFF0BC70),
+                      fontSize: 11,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (update.availableVersion != null) ...[
+            const SizedBox(height: 11),
+            _DarkSurface(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Versão ${update.availableVersion}',
+                    style: const TextStyle(
+                      color: WindfullTheme.text,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    update.releaseNotes?.isNotEmpty == true
+                        ? update.releaseNotes!
+                        : 'Sem notas para esta versão.',
+                    maxLines: 7,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: WindfullTheme.muted,
+                      fontSize: 11,
+                      height: 1.45,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 11),
+          _updateAction(update, active),
+          if (!update.managedInstall) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Uma instalação inicial pelo pacote oficial habilita atualizações no próprio app. Seus pareamentos e ajustes ficam na pasta de dados do usuário.',
+              style: TextStyle(
+                color: WindfullTheme.muted,
+                fontSize: 10,
+                height: 1.45,
+              ),
+            ),
+          ],
+        ],
+      );
+    },
+  );
+
+  Widget _updateAction(WindowsUpdateController updates, bool active) {
+    if (!updates.managedInstall) {
+      return OutlinedButton.icon(
+        onPressed: active ? null : updates.openReleasePage,
+        icon: const Icon(Icons.open_in_new_rounded, size: 17),
+        label: const Text('Abrir pacote oficial'),
+      );
+    }
+    if (updates.status == WindowsUpdateStatus.available) {
+      return FilledButton.icon(
+        onPressed: updates.download,
+        icon: const Icon(Icons.download_rounded, size: 17),
+        label: Text('Baixar ${updates.availableVersion}'),
+      );
+    }
+    if (updates.status == WindowsUpdateStatus.downloaded) {
+      return FilledButton.icon(
+        onPressed: () async {
+          if (await updates.apply()) widget.onExitApplication?.call();
+        },
+        icon: const Icon(Icons.restart_alt_rounded, size: 17),
+        label: const Text('Instalar e reiniciar'),
+      );
+    }
+    return OutlinedButton.icon(
+      onPressed: active ? null : updates.check,
+      icon: Icon(active ? Icons.sync_rounded : Icons.refresh_rounded, size: 17),
+      label: Text(switch (updates.status) {
+        WindowsUpdateStatus.checking => 'Verificando…',
+        WindowsUpdateStatus.downloading => 'Baixando atualização',
+        WindowsUpdateStatus.applying => 'Reiniciando…',
+        WindowsUpdateStatus.upToDate => 'Verificar atualizações',
+        _ => 'Tentar novamente',
+      }),
+    );
+  }
+
+  String _updateTitle(WindowsUpdateStatus status) => switch (status) {
+    WindowsUpdateStatus.idle => 'Preparando atualizações',
+    WindowsUpdateStatus.checking => 'Verificando versões',
+    WindowsUpdateStatus.upToDate => 'WindFull atualizado',
+    WindowsUpdateStatus.available => 'Nova versão disponível',
+    WindowsUpdateStatus.downloading => 'Baixando pacote',
+    WindowsUpdateStatus.downloaded => 'Pronto para instalar',
+    WindowsUpdateStatus.applying => 'Instalando e reiniciando',
+    WindowsUpdateStatus.notManaged => 'Instalação inicial necessária',
+    WindowsUpdateStatus.failed => 'Atualização interrompida',
+  };
 
   Future<void> _saveEnergyPrice(double price) async {
     try {

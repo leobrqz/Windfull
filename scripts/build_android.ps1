@@ -7,6 +7,7 @@ $keyProperties = Join-Path $app 'android\key.properties'
 $output = Join-Path $root 'output\android'
 $source = Join-Path $app 'build\app\outputs\flutter-apk\app-release.apk'
 $destination = Join-Path $output 'Windfull-Android-universal-release.apk'
+$catalog = Join-Path $output 'android-update.json'
 
 if (-not (Test-Path -LiteralPath $keyProperties) -and -not $AllowDebugSigning) {
     throw 'Configure app/android/key.properties for release signing, or use -AllowDebugSigning for local tests only.'
@@ -29,8 +30,13 @@ finally {
 
 if (-not (Test-Path -LiteralPath $source)) { throw "APK not found: $source" }
 Copy-Item -LiteralPath $source -Destination $destination -Force
-$checksum = "$((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash)  $(Split-Path -Leaf $destination)"
-Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Value $checksum -Encoding ascii
+$metadataScript = Join-Path $PSScriptRoot 'android_update_metadata.ps1'
+& $metadataScript -ApkPath $destination -CatalogPath $catalog
+if ($LASTEXITCODE -ne 0) { throw 'Android update metadata generation failed.' }
+$checksums = foreach ($artifact in @($destination, $catalog)) {
+    "$((Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash)  $(Split-Path -Leaf $artifact)"
+}
+Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Value $checksums -Encoding ascii
 if (-not (Test-Path -LiteralPath $keyProperties)) {
     Write-Warning 'APK uses the local debug signing key and is for local testing only.'
 }

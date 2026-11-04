@@ -6,6 +6,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'data/pairing_store.dart';
 import 'data/pairing_client_name.dart';
 import 'data/windfull_client.dart';
+import 'updates/android_update_controller.dart';
+import 'updates/android_updates_sheet.dart';
 import 'ui/windfull_brand_mark.dart';
 import 'ui/windfull_palette.dart';
 
@@ -121,6 +123,7 @@ class RemoteHomePage extends StatefulWidget {
 class _RemoteHomePageState extends State<RemoteHomePage> {
   final _client = WindfullClient();
   final _pairingStore = PairingStore();
+  final _updates = AndroidUpdateController();
   PairingCredential? _credential;
   List<DiscoveredServer> _servers = const [];
   Map<String, dynamic>? _snapshot;
@@ -137,6 +140,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
     super.initState();
     _restore();
     _discover();
+    unawaited(_updates.initialize());
     _pollTimer = Timer.periodic(
       const Duration(seconds: 4),
       (_) => _refreshState(),
@@ -146,6 +150,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _updates.dispose();
     super.dispose();
   }
 
@@ -1088,6 +1093,25 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
                       : '${_credential!.host}:${_credential!.port} - ${_snapshot?['connected'] == true ? 'conectado' : 'sem resposta'}',
                 ),
               ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.system_update_alt_rounded),
+                title: const Text('Atualizações'),
+                subtitle: Text(_updateSummary),
+                onTap: () {
+                  Navigator.pop(context);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!mounted) return;
+                    showModalBottomSheet<void>(
+                      context: this.context,
+                      isScrollControlled: true,
+                      showDragHandle: true,
+                      backgroundColor: WindfullPalette.canvas,
+                      builder: (_) => AndroidUpdatesSheet(controller: _updates),
+                    );
+                  });
+                },
+              ),
               const ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(Icons.security_rounded),
@@ -1115,6 +1139,21 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
       ),
     );
   }
+
+  String get _updateSummary => switch (_updates.status) {
+    AndroidUpdateStatus.checking => 'Verificando versões publicadas',
+    AndroidUpdateStatus.available => 'Nova versão disponível',
+    AndroidUpdateStatus.downloading => 'Baixando atualização',
+    AndroidUpdateStatus.downloaded => 'Pronta para instalar',
+    AndroidUpdateStatus.manualInstallRequired =>
+      'Instalação inicial necessária',
+    AndroidUpdateStatus.permissionRequired =>
+      'Permissão de instalação necessária',
+    AndroidUpdateStatus.installing => 'Aguardando confirmação do Android',
+    AndroidUpdateStatus.failed => 'Não foi possível verificar atualizações',
+    AndroidUpdateStatus.upToDate => 'WindFull atualizado',
+    AndroidUpdateStatus.idle => 'Verifique a versão do aplicativo',
+  };
 }
 
 class _ManualIpDialog extends StatefulWidget {
