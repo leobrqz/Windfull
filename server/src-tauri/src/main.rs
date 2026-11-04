@@ -5,6 +5,7 @@ mod storage;
 mod updates;
 
 use host::HostService;
+use std::time::Duration;
 use storage::Storage;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -137,7 +138,9 @@ async fn set_alerts_enabled(
 
 fn toggle_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) {
+        let visible = window.is_visible().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        if visible && focused {
             let _ = window.hide();
         } else {
             show_window(app);
@@ -247,7 +250,18 @@ fn main() {
                 let _ = window.hide();
             }
             WindowEvent::Focused(false) => {
-                let _ = window.hide();
+                // A tray panel can briefly lose focus while WebView2 changes
+                // focused controls or Windows displays a native control. Wait
+                // for that transition to settle before treating it as an
+                // outside click.
+                let window = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    if window.is_visible().unwrap_or(false) && !window.is_focused().unwrap_or(true)
+                    {
+                        let _ = window.hide();
+                    }
+                });
             }
             _ => {}
         })

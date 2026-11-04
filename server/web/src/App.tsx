@@ -84,6 +84,10 @@ export default function App() {
   const powered = appliance?.isPoweredOn === true;
   const busy = (key: string) => Boolean(host?.busyActions.includes(key)) || actionBusy === key || actionBusy === ({ power: "set_power", temperature: "set_target_temperature", mode: "set_operating_mode", fanSpeed: "set_fan_speed", windFree: "set_feature" } as Record<string, string>)[key];
   const openSettings = (next: Tab) => { setTab(next); setSettings(true); };
+  const selectSettingsTab = (next: Tab) => {
+    setTab(next);
+    void getCurrentWindow().setFocus().catch(e => setActionError(String(e)));
+  };
   const modes = appliance?.supportedModes ?? [];
   const fanSpeeds = appliance?.fanSpeeds ?? [];
   const features = useMemo(() => Object.entries(appliance?.features ?? {}), [appliance?.features]);
@@ -158,7 +162,7 @@ export default function App() {
       {!appliance && <div className="empty-link"><span>Conecte seu aparelho para começar</span><button onClick={() => openSettings("appliance")}>Configurar</button></div>}
     </section> : <section className="settings-view">
       <div className="settings-head"><h2>Ajustes</h2></div>
-      <nav className="settings-nav" aria-label="Seções de ajustes">{tabs.map(t => <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>{t.label}</button>)}</nav>
+      <nav className="settings-nav" aria-label="Seções de ajustes">{tabs.map(t => <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => selectSettingsTab(t.id)}>{t.label}</button>)}</nav>
       <div className="scroll-area settings-content">
         {tab === "appliance" && <>
           <SectionTitle title="Aparelho" action={<button className="text-action" disabled={host?.isDiscovering} onClick={() => void run("discover_appliances")}>{host?.isDiscovering ? "Buscando…" : "⌕ Buscar na rede"}</button>} />
