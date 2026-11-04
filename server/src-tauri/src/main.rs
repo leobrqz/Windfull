@@ -5,7 +5,7 @@ mod storage;
 mod updates;
 
 use host::HostService;
-use std::time::Duration;
+use std::{path::PathBuf, process::Command, sync::OnceLock, time::Duration};
 use storage::Storage;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -14,7 +14,147 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt as AutoStartManagerExt;
 use tauri_plugin_positioner::{Position, WindowExt};
+use tracing_appender::{
+    non_blocking::WorkerGuard,
+    rolling::{RollingFileAppender, Rotation},
+};
 use updates::UpdateService;
+
+static LOG_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
+fn preferred_log_directory() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("io.github.leobrqz").join("WindFull").join("logs")
+}
+
+fn log_directory() -> PathBuf {
+    LOG_DIRECTORY
+        .get()
+        .cloned()
+        .unwrap_or_else(preferred_log_directory)
+}
+
+fn initialize_logging() -> Option<WorkerGuard> {
+    let candidates = [
+        preferred_log_directory(),
+        std::env::temp_dir().join("WindFull").join("logs"),
+    ];
+
+    for directory in candidates {
+        if std::fs::create_dir_all(&directory).is_err() {
+            continue;
+        }
+        let appender = RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix("windfull")
+            .filename_suffix("log")
+            .max_log_files(14)
+            .build(&directory);
+        let Ok(appender) = appender else {
+            continue;
+        };
+        let (writer, guard) = tracing_appender::non_blocking(appender);
+        if tracing_subscriber::fmt()
+            .with_env_filter("info")
+            .with_ansi(false)
+            .with_writer(writer)
+            .try_init()
+            .is_ok()
+        {
+            let _ = LOG_DIRECTORY.set(directory.clone());
+            tracing::info!(log_directory = %directory.display(), "Persistent diagnostics logging started");
+            return Some(guard);
+        }
+    }
+
+    None
+}
+
+fn install_panic_logging() {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        tracing::error!(target: "panic", details = %panic, "WindFull host panic");
+        previous_hook(panic);
+    }));
+}
+
+fn clean_log_field(value: &str, max_chars: usize) -> String {
+    value
+        .chars()
+        .take(max_chars)
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn report_frontend_error(
+    kind: String,
+    message: String,
+    source: Option<String>,
+    line: Option<u32>,
+    column: Option<u32>,
+    stack: Option<String>,
+) {
+    let kind = clean_log_field(&kind, 80);
+    let message = clean_log_field(&message, 1200);
+    let source = source.map(|value| clean_log_field(&value, 500));
+    let stack = stack.map(|value| clean_log_field(&value, 6000));
+    tracing::error!(
+        target: "frontend",
+        kind = %kind,
+        message = %message,
+        source = ?source,
+        line = ?line,
+        column = ?column,
+        stack = ?stack,
+        "WebView front-end error"
+    );
+}
+
+#[tauri::command]
+fn log_ui_event(event: String) {
+    let allowed = [
+        "settings.tab.appliance",
+        "settings.tab.phones",
+        "settings.tab.network",
+        "settings.tab.energy",
+        "settings.tab.automation",
+        "settings.tab.updates",
+    ];
+    if allowed.contains(&event.as_str()) {
+        tracing::info!(target: "ui", event = %event, "Settings section selected");
+    }
+}
+
+#[tauri::command]
+fn open_log_folder() -> Result<(), String> {
+    let directory = log_directory();
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("Could not create the WindFull log folder: {error}"))?;
+
+    #[cfg(windows)]
+    {
+        Command::new("explorer.exe")
+            .arg(&directory)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Could not open the WindFull log folder: {error}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("xdg-open").arg(&directory).spawn();
+        Err("Opening the log folder is supported on Windows builds.".into())
+    }
+}
 
 #[tauri::command]
 async fn get_host_state(
@@ -140,8 +280,12 @@ fn toggle_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(false);
         let focused = window.is_focused().unwrap_or(false);
+        tracing::info!(visible, focused, "Tray icon activated");
         if visible && focused {
-            let _ = window.hide();
+            match window.hide() {
+                Ok(()) => tracing::info!("Panel hidden from tray icon"),
+                Err(error) => tracing::error!(%error, "Could not hide panel from tray icon"),
+            }
         } else {
             show_window(app);
         }
@@ -150,21 +294,34 @@ fn toggle_window(app: &AppHandle) {
 
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.move_window(Position::TrayCenter);
-        let _ = window.show();
-        let _ = window.set_focus();
+        if let Err(error) = window.move_window(Position::TrayCenter) {
+            tracing::warn!(%error, "Could not position panel beside tray icon");
+        }
+        if let Err(error) = window.show() {
+            tracing::error!(%error, "Could not show panel");
+            return;
+        }
+        if let Err(error) = window.set_focus() {
+            tracing::warn!(%error, "Could not focus panel");
+        }
     }
 }
 
 fn main() {
+    let _log_guard = initialize_logging();
+    install_panic_logging();
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "WindFull host starting"
+    );
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         rustls::crypto::ring::default_provider()
             .install_default()
             .expect("Could not install the Rustls ring crypto provider");
+        tracing::info!("Installed Rustls ring crypto provider");
     }
     let mut velopack = velopack::VelopackApp::build().set_auto_apply_on_startup(false);
     velopack.run();
-    tracing_subscriber::fmt().with_env_filter("info").init();
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .plugin(
@@ -174,6 +331,7 @@ fn main() {
         )
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            tracing::info!("Tauri application setup started");
             let storage = Storage::open().map_err(std::io::Error::other)?;
             let identity = storage.load_identity().map_err(std::io::Error::other)?;
             let current_dir = std::env::current_exe()
@@ -246,10 +404,15 @@ fn main() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
+                tracing::info!("Panel close requested; hiding to tray");
                 api.prevent_close();
                 let _ = window.hide();
             }
+            WindowEvent::Focused(true) => {
+                tracing::info!("Panel gained focus");
+            }
             WindowEvent::Focused(false) => {
+                tracing::info!("Panel lost focus; waiting before auto-hide");
                 // A tray panel can briefly lose focus while WebView2 changes
                 // focused controls or Windows displays a native control. Wait
                 // for that transition to settle before treating it as an
@@ -259,7 +422,12 @@ fn main() {
                     tokio::time::sleep(Duration::from_millis(250)).await;
                     if window.is_visible().unwrap_or(false) && !window.is_focused().unwrap_or(true)
                     {
-                        let _ = window.hide();
+                        match window.hide() {
+                            Ok(()) => tracing::info!("Panel auto-hidden after focus loss"),
+                            Err(error) => tracing::error!(%error, "Could not auto-hide panel"),
+                        }
+                    } else {
+                        tracing::info!("Panel remained open after focus check");
                     }
                 });
             }
@@ -284,6 +452,9 @@ fn main() {
             set_off_timer,
             reset_filter_reminder,
             set_alerts_enabled,
+            report_frontend_error,
+            log_ui_event,
+            open_log_folder,
             updates::get_update_context,
             updates::check_for_updates,
             updates::download_update,

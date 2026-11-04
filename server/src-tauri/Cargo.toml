@@ -33,6 +33,7 @@ tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 tracing = "0.1"
+tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 velopack = "=1.2.161"

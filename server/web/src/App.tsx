@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import windfullMark from "../../../app/assets/brand/windfull-mark.svg";
+import SectionErrorBoundary from "./SectionErrorBoundary";
+import { reportFrontendError } from "./diagnostics";
 import type { AvailableUpdate, HostViewState, UpdateContext } from "./types";
 
 type Tab = "controls" | "appliance" | "phones" | "network" | "energy" | "automation" | "updates";
@@ -38,13 +40,21 @@ export default function App() {
   const [hostAlert, setHostAlert] = useState<{ type: string; title: string; message: string; createdAt: string } | null>(null);
 
   const refresh = useCallback(async () => {
-    const state = await command<HostViewState>("get_host_state");
-    setHost(state);
+    try {
+      const state = await command<HostViewState>("get_host_state");
+      setHost(state);
+    } catch (error) {
+      reportFrontendError({ kind: "host-state", message: String(error) });
+      throw error;
+    }
   }, []);
   const run = useCallback(async (name: string, args?: Record<string, unknown>) => {
     setActionError(""); setActionBusy(name);
     try { await command(name, args); await refresh(); }
-    catch (e) { setActionError(String(e)); }
+    catch (e) {
+      reportFrontendError({ kind: `tauri-command:${name}`, message: String(e) });
+      setActionError(String(e));
+    }
     finally { setActionBusy(""); }
   }, [refresh]);
   useEffect(() => {
@@ -52,11 +62,20 @@ export default function App() {
     let unlistenAlert: (() => void) | undefined;
     void (async () => {
       try { await refresh(); }
-      catch (e) { setActionError(`Não foi possível carregar o estado do host: ${String(e)}`); }
+      catch (e) {
+        reportFrontendError({ kind: "host-state-on-open", message: String(e) });
+        setActionError(`Não foi possível carregar o estado do host: ${String(e)}`);
+      }
       try { unlisten = await listen<HostViewState>("host-state-changed", event => setHost(event.payload)); }
-      catch (e) { setActionError(`Não foi possível assinar eventos do host: ${String(e)}`); }
+      catch (e) {
+        reportFrontendError({ kind: "host-state-listener", message: String(e) });
+        setActionError(`Não foi possível assinar eventos do host: ${String(e)}`);
+      }
       try { unlistenAlert = await listen<{ type: string; title: string; message: string; createdAt: string }>("host-alert", event => setHostAlert(event.payload)); }
-      catch (e) { setActionError(`Não foi possível assinar alertas do host: ${String(e)}`); }
+      catch (e) {
+        reportFrontendError({ kind: "host-alert-listener", message: String(e) });
+        setActionError(`Não foi possível assinar alertas do host: ${String(e)}`);
+      }
     })();
     return () => { unlisten?.(); unlistenAlert?.(); };
   }, [refresh]);
@@ -83,9 +102,14 @@ export default function App() {
   const connected = host?.applianceConnection === "connected" && appliance !== null;
   const powered = appliance?.isPoweredOn === true;
   const busy = (key: string) => Boolean(host?.busyActions.includes(key)) || actionBusy === key || actionBusy === ({ power: "set_power", temperature: "set_target_temperature", mode: "set_operating_mode", fanSpeed: "set_fan_speed", windFree: "set_feature" } as Record<string, string>)[key];
-  const openSettings = (next: Tab) => { setTab(next); setSettings(true); };
+  const openSettings = (next: Tab) => {
+    setTab(next);
+    setSettings(true);
+    void command("log_ui_event", { event: `settings.tab.${next}` }).catch(() => undefined);
+  };
   const selectSettingsTab = (next: Tab) => {
     setTab(next);
+    void command("log_ui_event", { event: `settings.tab.${next}` }).catch(() => undefined);
     void getCurrentWindow().setFocus().catch(e => setActionError(String(e)));
   };
   const modes = appliance?.supportedModes ?? [];
@@ -103,7 +127,10 @@ export default function App() {
         setUpdateStatus("Baixando pacote"); setUpdatePercent(0); await command(name); setUpdateDownloaded(true); setUpdateStatus("Pronto para instalar");
       } else if (name === "apply_update") { setUpdateStatus("Instalando e reiniciando"); await command(name); }
       else { await command(name); }
-    } catch (e) { setUpdateStatus("Atualização interrompida"); setUpdateError(String(e)); }
+    } catch (e) {
+      reportFrontendError({ kind: `update-command:${name}`, message: String(e) });
+      setUpdateStatus("Atualização interrompida"); setUpdateError(String(e));
+    }
   };
 
   return <main className="panel">
@@ -163,6 +190,7 @@ export default function App() {
     </section> : <section className="settings-view">
       <div className="settings-head"><h2>Ajustes</h2></div>
       <nav className="settings-nav" aria-label="Seções de ajustes">{tabs.map(t => <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => selectSettingsTab(t.id)}>{t.label}</button>)}</nav>
+      <SectionErrorBoundary key={tab} onOpenLogs={() => { void command("open_log_folder").catch(e => setActionError(String(e))); }}>
       <div className="scroll-area settings-content">
         {tab === "appliance" && <>
           <SectionTitle title="Aparelho" action={<button className="text-action" disabled={host?.isDiscovering} onClick={() => void run("discover_appliances")}>{host?.isDiscovering ? "Buscando…" : "⌕ Buscar na rede"}</button>} />
@@ -186,6 +214,9 @@ export default function App() {
           <div className="info-note">A identidade do servidor e os pareamentos devem permanecer consistentes entre atualizações. O Android precisa estar na mesma rede.</div>
           <SectionTitle title="Inicialização" />
           <div className="startup-row"><div><b>Iniciar com o Windows</b><small>Abre o WindFull ao entrar na sua conta.</small></div><button className={`switch ${host?.startWithWindows ? "checked" : ""}`} role="switch" aria-checked={host?.startWithWindows ?? false} disabled={!host || actionBusy === "set_start_with_windows"} onClick={() => void run("set_start_with_windows", { enabled: !host?.startWithWindows })}><i /></button></div>
+          <SectionTitle title="Diagnóstico" />
+          <div className="startup-row"><div><b>Logs do aplicativo</b><small>Erros da interface, janela e servidor local.</small></div><button className="text-action" onClick={() => void command("open_log_folder").catch(e => setActionError(String(e)))}>Abrir pasta</button></div>
+          <p className="muted-line">Os registros ficam neste computador e mantêm até 14 arquivos diários.</p>
         </>}
         {tab === "energy" && host && <>
           <SectionTitle title="Consumo medido" />
@@ -214,6 +245,7 @@ export default function App() {
           {updateContext?.managed ? updateDownloaded ? <button className="primary-btn full" disabled={actionBusy !== ""} onClick={() => void updateAction("apply_update")}>Instalar e reiniciar <span>↻</span></button> : update ? <button className="primary-btn full" disabled={actionBusy !== "" || updateStatus === "Baixando pacote"} onClick={() => void updateAction("download_update")}>Baixar atualização <span>↓</span></button> : <button className="quiet-btn full" disabled={updateStatus === "Verificando versões"} onClick={() => void updateAction("check_for_updates")}>Verificar atualizações</button> : updateContext && <><div className="info-note">Esta instalação não oferece atualização automática. Use o pacote oficial para manter seus dados locais.</div><button className="quiet-btn full" onClick={() => void updateAction("open_release_page")}>Abrir pacote oficial ↗</button></>}
         </>}
       </div>
+      </SectionErrorBoundary>
     </section>}
     <footer className="panel-footer">{host?.status === "ready" ? "Servidor ativo" : statusName(host?.status)}</footer>
   </main>;

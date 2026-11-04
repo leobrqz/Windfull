@@ -2,8 +2,9 @@ use serde_json::{json, Value};
 use std::{path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin, Command},
+    process::{Child, ChildStderr, ChildStdin, Command},
     sync::Mutex,
+    task::JoinHandle,
     time::timeout,
 };
 
@@ -13,6 +14,7 @@ pub struct SamsungBridge {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     stdout: Option<BufReader<tokio::process::ChildStdout>>,
+    stderr_task: Option<JoinHandle<()>>,
     request_id: u64,
 }
 
@@ -24,6 +26,7 @@ impl SamsungBridge {
             child: None,
             stdin: None,
             stdout: None,
+            stderr_task: None,
             request_id: 0,
         }
     }
@@ -37,17 +40,27 @@ impl SamsungBridge {
             .arg(&self.data_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| format!("Não foi possível iniciar a ponte Samsung local: {e}"))?;
         self.stdin = child.stdin.take();
         self.stdout = child.stdout.take().map(BufReader::new);
+        self.stderr_task = child.stderr.take().map(log_bridge_stderr);
         self.child = Some(child);
+        tracing::info!("Samsung OCF bridge started");
         Ok(())
     }
 
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let result = self.call_inner(method, params).await;
+        if let Err(error) = &result {
+            tracing::error!(target: "samsung_bridge", method, %error, "Samsung OCF request failed");
+        }
+        result
+    }
+
+    async fn call_inner(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.start().await?;
         self.request_id += 1;
         let id = self.request_id;
@@ -100,7 +113,28 @@ impl SamsungBridge {
         self.child = None;
         self.stdin = None;
         self.stdout = None;
+        if let Some(task) = self.stderr_task.take() {
+            task.abort();
+        }
     }
+}
+
+fn log_bridge_stderr(stderr: ChildStderr) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    tracing::warn!(target: "samsung_bridge", message = %line, "Samsung OCF bridge stderr");
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    tracing::error!(target: "samsung_bridge", %error, "Could not read Samsung OCF bridge stderr");
+                    break;
+                }
+            }
+        }
+    })
 }
 
 pub type SharedBridge = Arc<Mutex<SamsungBridge>>;

@@ -191,16 +191,20 @@ impl HostService {
     pub async fn start(&self) -> Result<(), String> {
         let result = self.start_inner().await;
         if let Err(error) = &result {
+            tracing::error!(%error, "Local HTTPS host startup failed");
             let mut state = self.0.state.lock().await;
             state.status = "error".into();
             state.server_error = Some(error.clone());
             drop(state);
             self.emit().await;
+        } else {
+            tracing::info!(port = API_PORT, "Local HTTPS host is ready");
         }
         result
     }
 
     async fn start_inner(&self) -> Result<(), String> {
+        tracing::info!(port = API_PORT, "Binding local HTTPS API");
         {
             let mut s = self.0.state.lock().await;
             s.status = "starting".into();
@@ -292,12 +296,14 @@ impl HostService {
                             device["id"] = json!(id);
                         }
                         if let Err(error) = monitor.refresh_appliance(device, name).await {
+                            tracing::warn!(%error, "Could not load state from saved Samsung appliance");
                             let mut s = monitor.0.state.lock().await;
                             s.appliance_connection = "error".into();
                             s.appliance_error = Some(error);
                         }
                     }
                     Err(error) => {
+                        tracing::warn!(%error, "Could not reconnect to saved Samsung appliance");
                         let mut s = monitor.0.state.lock().await;
                         s.appliance_connection = "disconnected".into();
                         s.appliance_error = Some(error);
@@ -558,6 +564,7 @@ impl HostService {
     }
 
     pub async fn discover(&self) -> Result<(), String> {
+        tracing::info!("Samsung appliance discovery started");
         {
             let mut s = self.0.state.lock().await;
             s.is_discovering = true;
@@ -597,6 +604,10 @@ impl HostService {
                     })
                     .collect();
                 let mut s = self.0.state.lock().await;
+                tracing::info!(
+                    count = devices.len(),
+                    "Samsung appliance discovery completed"
+                );
                 s.discovered_appliances = devices;
                 s.has_searched_for_appliances = true;
                 s.is_discovering = false;
@@ -605,6 +616,7 @@ impl HostService {
                 Ok(())
             }
             Err(error) => {
+                tracing::warn!(%error, "Samsung appliance discovery failed");
                 let mut s = self.0.state.lock().await;
                 s.is_discovering = false;
                 s.discovery_error = Some(error.clone());
@@ -798,6 +810,7 @@ impl HostService {
     }
 
     pub async fn control(&self, kind: &str, value: Value) -> Result<(), String> {
+        tracing::info!(control = kind, "Appliance control requested");
         let appliance = self
             .0
             .state
