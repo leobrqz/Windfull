@@ -64,11 +64,14 @@ impl Default for HostViewState {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnergyUsageState {
+    #[serde(rename = "todayKWh")]
     pub today_kwh: f64,
+    #[serde(rename = "hourlyKWh")]
     pub hourly_kwh: Vec<f64>,
     #[serde(rename = "pricePerKWh")]
     pub price_per_kwh: f64,
     pub monthly_estimate: f64,
+    #[serde(rename = "meterKWh")]
     pub meter_kwh: Option<f64>,
     pub last_sample_at: Option<String>,
     pub has_baseline: bool,

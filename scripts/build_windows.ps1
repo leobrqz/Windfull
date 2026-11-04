@@ -51,6 +51,31 @@ function Resolve-StrawberryPerlBin([string]$RequestedPath) {
     return $null
 }
 
+function Invoke-NativeBuildCommand {
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [switch]$CaptureOutput
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 turns native stderr warnings into error records.
+        # Keep them visible, but let the explicit process exit-code checks decide failure.
+        $ErrorActionPreference = 'Continue'
+        if ($CaptureOutput) {
+            $script:NativeBuildCommandOutput = @(& $FilePath @Arguments)
+        }
+        else {
+            & $FilePath @Arguments
+        }
+        $script:NativeBuildCommandExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 if (-not (Test-Path -LiteralPath $bridgeManifest -PathType Leaf)) { throw "Samsung bridge Cargo manifest is missing: $bridgeManifest" }
 if (-not (Test-Path -LiteralPath (Join-Path $tauri 'Cargo.toml') -PathType Leaf)) { throw "Tauri host manifest is missing: $(Join-Path $tauri 'Cargo.toml')" }
 if (-not (Test-Path -LiteralPath (Join-Path $web 'package-lock.json') -PathType Leaf)) { throw "Frontend npm lockfile is missing: $(Join-Path $web 'package-lock.json')" }
@@ -72,33 +97,43 @@ New-Item -ItemType Directory -Path $output -Force | Out-Null
 $toolManifest = Join-Path $root '.config\dotnet-tools.json'
 $dotnetCommand = (Get-Command dotnet.exe -ErrorAction SilentlyContinue).Source
 $localDotnet = Join-Path $env:USERPROFILE '.dotnet\dotnet.exe'
-if ((-not $dotnetCommand -or -not (& $dotnetCommand --list-sdks)) -and (Test-Path -LiteralPath $localDotnet)) { $dotnetCommand = $localDotnet }
-if (-not $dotnetCommand -or -not (& $dotnetCommand --list-sdks)) { throw 'The .NET SDK is required for the pinned Velopack packager.' }
-& $dotnetCommand tool restore --tool-manifest $toolManifest
-if ($LASTEXITCODE -ne 0) { throw 'Pinned Velopack CLI restore failed.' }
+$hasDotnetSdk = $false
+if ($dotnetCommand) {
+    Invoke-NativeBuildCommand -FilePath $dotnetCommand -Arguments @('--list-sdks') -CaptureOutput
+    $hasDotnetSdk = $script:NativeBuildCommandExitCode -eq 0 -and $script:NativeBuildCommandOutput.Count -gt 0
+}
+if (-not $hasDotnetSdk -and (Test-Path -LiteralPath $localDotnet)) {
+    $dotnetCommand = $localDotnet
+    Invoke-NativeBuildCommand -FilePath $dotnetCommand -Arguments @('--list-sdks') -CaptureOutput
+    $hasDotnetSdk = $script:NativeBuildCommandExitCode -eq 0 -and $script:NativeBuildCommandOutput.Count -gt 0
+}
+if (-not $dotnetCommand -or -not $hasDotnetSdk) { throw 'The .NET SDK is required for the pinned Velopack packager.' }
+Invoke-NativeBuildCommand -FilePath $dotnetCommand -Arguments @('tool', 'restore', '--tool-manifest', $toolManifest)
+if ($script:NativeBuildCommandExitCode -ne 0) { throw 'Pinned Velopack CLI restore failed.' }
 
 try {
     # Keep Strawberry Perl scoped to child processes launched for this build.
     $env:PATH = "$resolvedPerlBin;$processPath"
-    & cargo build --release --locked --manifest-path $bridgeManifest
-    if ($LASTEXITCODE -ne 0) { throw "Samsung bridge cargo build failed with exit code $LASTEXITCODE." }
+    Invoke-NativeBuildCommand -FilePath (Get-Command cargo.exe).Source -Arguments @('build', '--release', '--locked', '--manifest-path', $bridgeManifest)
+    if ($script:NativeBuildCommandExitCode -ne 0) { throw "Samsung bridge cargo build failed with exit code $script:NativeBuildCommandExitCode." }
     if (-not (Test-Path -LiteralPath $bridgeExecutable -PathType Leaf)) { throw "Cargo completed without producing the Samsung bridge: $bridgeExecutable" }
 
     Push-Location $web
     try {
-        & npm.cmd ci --no-audit --no-fund
-        if ($LASTEXITCODE -ne 0) { throw "Frontend npm ci failed ($LASTEXITCODE)." }
-        & npx.cmd --no-install tauri --version
-        if ($LASTEXITCODE -ne 0) { throw 'Pinned Tauri CLI is missing from server/web dependencies.' }
+        Invoke-NativeBuildCommand -FilePath (Get-Command npm.cmd).Source -Arguments @('ci', '--no-audit', '--no-fund')
+        if ($script:NativeBuildCommandExitCode -ne 0) { throw "Frontend npm ci failed ($script:NativeBuildCommandExitCode)." }
+        Invoke-NativeBuildCommand -FilePath (Get-Command npx.cmd).Source -Arguments @('--no-install', 'tauri', '--version')
+        if ($script:NativeBuildCommandExitCode -ne 0) { throw 'Pinned Tauri CLI is missing from server/web dependencies.' }
         $tauriCli = Join-Path $web 'node_modules\.bin\tauri.cmd'
         if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) { throw 'Pinned Tauri CLI executable is missing from server/web dependencies.' }
         # Tauri release version comes from Cargo; build the UI from the server project root.
         $buildConfig = @{ version = $version; build = @{ beforeBuildCommand = 'npm run build' } }
         [IO.File]::WriteAllText($tempTauriConfig, ($buildConfig | ConvertTo-Json -Compress -Depth 4), [Text.UTF8Encoding]::new($false))
         Push-Location $server
-        try { & $tauriCli build --config (Join-Path $tauri 'tauri.conf.json') --config $tempTauriConfig --no-bundle }
+        $tauriArguments = @('build', '--config', (Join-Path $tauri 'tauri.conf.json'), '--config', $tempTauriConfig, '--no-bundle')
+        try { Invoke-NativeBuildCommand -FilePath $tauriCli -Arguments $tauriArguments }
         finally { Pop-Location }
-        if ($LASTEXITCODE -ne 0) { throw "Tauri Windows build failed ($LASTEXITCODE)." }
+        if ($script:NativeBuildCommandExitCode -ne 0) { throw "Tauri Windows build failed ($script:NativeBuildCommandExitCode)." }
     }
     finally { Pop-Location }
 
@@ -126,9 +161,9 @@ try {
         '--outputDir', $packDirectory)
     if ($ReleaseNotes) { $packArguments += @('--releaseNotes', (Resolve-Path -LiteralPath $ReleaseNotes).Path) }
     Push-Location $root
-    try { & $dotnetCommand @packArguments }
+    try { Invoke-NativeBuildCommand -FilePath $dotnetCommand -Arguments $packArguments }
     finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0) { throw 'Velopack packaging failed.' }
+    if ($script:NativeBuildCommandExitCode -ne 0) { throw 'Velopack packaging failed.' }
 
     $portable = Join-Path $packDirectory "$packageId-$channel-Portable.zip"
     $fullPackage = Join-Path $packDirectory "$packageId-$version-$channel-full.nupkg"

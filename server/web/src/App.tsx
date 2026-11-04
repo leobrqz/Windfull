@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import windfullMark from "../../../app/assets/brand/windfull-mark.svg";
 import SectionErrorBoundary from "./SectionErrorBoundary";
 import { reportFrontendError } from "./diagnostics";
-import type { AvailableUpdate, HostViewState, UpdateContext } from "./types";
+import type { AvailableUpdate, EnergyUsageState, HostViewState, UpdateContext } from "./types";
 
 type Tab = "controls" | "appliance" | "phones" | "network" | "energy" | "automation" | "updates";
 const tabs: { id: Tab; label: string }[] = [
@@ -190,7 +190,6 @@ export default function App() {
     </section> : <section className="settings-view">
       <div className="settings-head"><h2>Ajustes</h2></div>
       <nav className="settings-nav" aria-label="Seções de ajustes">{tabs.map(t => <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => selectSettingsTab(t.id)}>{t.label}</button>)}</nav>
-      <SectionErrorBoundary key={tab} onOpenLogs={() => { void command("open_log_folder").catch(e => setActionError(String(e))); }}>
       <div className="scroll-area settings-content">
         {tab === "appliance" && <>
           <SectionTitle title="Aparelho" action={<button className="text-action" disabled={host?.isDiscovering} onClick={() => void run("discover_appliances")}>{host?.isDiscovering ? "Buscando…" : "⌕ Buscar na rede"}</button>} />
@@ -218,14 +217,9 @@ export default function App() {
           <div className="startup-row"><div><b>Logs do aplicativo</b><small>Erros da interface, janela e servidor local.</small></div><button className="text-action" onClick={() => void command("open_log_folder").catch(e => setActionError(String(e)))}>Abrir pasta</button></div>
           <p className="muted-line">Os registros ficam neste computador e mantêm até 14 arquivos diários.</p>
         </>}
-        {tab === "energy" && host && <>
-          <SectionTitle title="Consumo medido" />
-          <div className="energy-top"><div><span className="eyebrow">Hoje</span><strong>{host.energyUsage.hasBaseline ? show(host.energyUsage.todayKWh, 2) : "—"}<small> kWh</small></strong></div><div className="energy-estimate"><span className="eyebrow">Estimativa mensal</span><b>{host.energyUsage.hasBaseline ? `R$ ${show(host.energyUsage.monthlyEstimate, 2)}` : "—"}</b></div></div>
-          {host.energyUsage.hasBaseline && host.energyUsage.hourlyKWh.length ? <div className="chart"><div className="chart-label"><span>Consumo por hora</span><small>kWh · hoje</small></div><div className="bars">{host.energyUsage.hourlyKWh.map((v, i) => <div className="bar-column" key={i}><span title={`${show(v, 2)} kWh`} style={{ height: `${Math.max(3, (v / Math.max(...host.energyUsage.hourlyKWh, 0.01)) * 100)}%` }} /><small>{i % 4 === 0 ? `${String(i).padStart(2, "0")}h` : ""}</small></div>)}</div></div> : <EmptyState title="Sem histórico horário" detail="O gráfico aparece quando o host fornecer amostras de consumo." />}
-          <SectionTitle title="Tarifa de energia" />
-          <form className="price-form" onSubmit={e => { e.preventDefault(); const n = Number(price.replace(",", ".")); if (Number.isFinite(n) && n > 0 && n < 100) void run("set_energy_price_per_kwh", { price: n }); }}><label>Preço por kWh<input inputMode="decimal" value={price} onChange={e => setPrice(e.target.value)} /></label><span>R$ / kWh</span><button className="small-save" disabled={!price || Boolean(actionBusy)}>Salvar</button></form>
-          <p className="muted-line">Última amostra: {date(host.energyUsage.lastSampleAt)} · Medidor: {host.energyUsage.meterKWh == null ? "—" : `${show(host.energyUsage.meterKWh, 2)} kWh`}</p>
-        </>}
+        {tab === "energy" && host && <SectionErrorBoundary onOpenLogs={() => { void command("open_log_folder").catch(e => setActionError(String(e))); }}>
+          <EnergySettings host={host} price={price} setPrice={setPrice} actionBusy={actionBusy} run={run} />
+        </SectionErrorBoundary>}
         {tab === "automation" && host && <>
           <SectionTitle title="Desligar automaticamente" />
           <div className="timer-setting"><div><b>{host.offTimerEndsAt ? "Timer ativo" : "Desligamento programado"}</b><small>{host.offTimerEndsAt ? `Desliga em ${timeLeft(host.offTimerEndsAt)}` : "O cronômetro segue ativo com o painel fechado."}</small></div><select aria-label="Desligamento automático" value={timerSelection(host.offTimerEndsAt)} disabled={Boolean(actionBusy)} onChange={e => void run("set_off_timer", { hours: Number(e.target.value) })}><option value="0">Nunca</option><option value="1">1 hora</option><option value="2">2 horas</option><option value="4">4 horas</option><option value="8">8 horas</option></select></div>
@@ -245,10 +239,31 @@ export default function App() {
           {updateContext?.managed ? updateDownloaded ? <button className="primary-btn full" disabled={actionBusy !== ""} onClick={() => void updateAction("apply_update")}>Instalar e reiniciar <span>↻</span></button> : update ? <button className="primary-btn full" disabled={actionBusy !== "" || updateStatus === "Baixando pacote"} onClick={() => void updateAction("download_update")}>Baixar atualização <span>↓</span></button> : <button className="quiet-btn full" disabled={updateStatus === "Verificando versões"} onClick={() => void updateAction("check_for_updates")}>Verificar atualizações</button> : updateContext && <><div className="info-note">Esta instalação não oferece atualização automática. Use o pacote oficial para manter seus dados locais.</div><button className="quiet-btn full" onClick={() => void updateAction("open_release_page")}>Abrir pacote oficial ↗</button></>}
         </>}
       </div>
-      </SectionErrorBoundary>
     </section>}
     <footer className="panel-footer">{host?.status === "ready" ? "Servidor ativo" : statusName(host?.status)}</footer>
   </main>;
+}
+function EnergySettings({ host, price, setPrice, actionBusy, run }: {
+  host: HostViewState;
+  price: string;
+  setPrice: (value: string) => void;
+  actionBusy: string;
+  run: (name: string, args?: Record<string, unknown>) => Promise<void>;
+}) {
+  const energy = host.energyUsage as (EnergyUsageState & { hourlyKwh?: number[]; todayKwh?: number; meterKwh?: number | null }) | undefined;
+  const hourlyKWh = Array.isArray(energy?.hourlyKWh)
+    ? energy.hourlyKWh
+    : Array.isArray(energy?.hourlyKwh) ? energy.hourlyKwh : [];
+  const peakKWh = Math.max(...hourlyKWh, 0.01);
+
+  return <>
+    <SectionTitle title="Consumo medido" />
+    <div className="energy-top"><div><span className="eyebrow">Hoje</span><strong>{energy?.hasBaseline ? show(energy.todayKWh ?? energy.todayKwh, 2) : "—"}<small> kWh</small></strong></div><div className="energy-estimate"><span className="eyebrow">Estimativa mensal</span><b>{energy?.hasBaseline ? `R$ ${show(energy.monthlyEstimate, 2)}` : "—"}</b></div></div>
+    {energy?.hasBaseline && hourlyKWh.length ? <div className="chart"><div className="chart-label"><span>Consumo por hora</span><small>kWh · hoje</small></div><div className="bars">{hourlyKWh.map((value, index) => <div className="bar-column" key={index}><span title={`${show(value, 2)} kWh`} style={{ height: `${Math.max(3, (value / peakKWh) * 100)}%` }} /><small>{index % 4 === 0 ? `${String(index).padStart(2, "0")}h` : ""}</small></div>)}</div></div> : <EmptyState title="Sem histórico horário" detail="O gráfico aparece quando o host fornecer amostras de consumo." />}
+    <SectionTitle title="Tarifa de energia" />
+    <form className="price-form" onSubmit={event => { event.preventDefault(); const value = Number(price.replace(",", ".")); if (Number.isFinite(value) && value > 0 && value < 100) void run("set_energy_price_per_kwh", { price: value }); }}><label>Preço por kWh<input inputMode="decimal" value={price} onChange={event => setPrice(event.target.value)} /></label><span>R$ / kWh</span><button className="small-save" disabled={!price || Boolean(actionBusy)}>Salvar</button></form>
+    <p className="muted-line">Última amostra: {date(energy?.lastSampleAt)} · Medidor: {(energy?.meterKWh ?? energy?.meterKwh) == null ? "—" : `${show(energy?.meterKWh ?? energy?.meterKwh, 2)} kWh`}</p>
+  </>;
 }
 function connectionLabel(value: HostViewState["applianceConnection"]) { return ({ unknown: "Nenhum aparelho selecionado", connected: "Conectado", disconnected: "Desconectado", error: "Conexão indisponível" })[value]; }
 function statusName(value?: HostViewState["status"]) { return ({ ready: "Servidor ativo", starting: "Iniciando servidor", error: "Servidor indisponível", stopped: "Servidor parado" } as Record<string, string>)[value ?? ""] ?? "Estado desconhecido"; }

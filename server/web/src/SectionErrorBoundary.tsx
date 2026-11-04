@@ -29,7 +29,7 @@ export default class SectionErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="scroll-area settings-content section-error" role="alert">
+        <div className="section-error" role="alert">
           <h3>Esta seção não carregou</h3>
           <p>O WindFull registrou o erro. Você pode abrir os logs ou escolher outra seção.</p>
           <button className="quiet-btn" onClick={() => this.setState({ error: null })}>Tentar novamente</button>
