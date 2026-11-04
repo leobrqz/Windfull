@@ -12,6 +12,7 @@ use openssl::x509::{X509NameBuilder, X509};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, ToSocketAddrs, UdpSocket};
@@ -28,6 +29,8 @@ const COAP_ACK_TIMEOUT_MIN_MS: u64 = 1_000;
 const COAP_ACK_TIMEOUT_MAX_MS: u64 = 1_500;
 const COAP_MAX_RETRANSMITS: usize = 3;
 const COAP_NOT_FOUND: u8 = (4 << 5) | 4;
+const COAP_OBSERVE: u16 = 6;
+const OCF_OBSERVABLE_BIT: u64 = 0x02;
 const DTLS_PORTS: &[u16] = &[
     5684, 49152, 49153, 49154, 49155, 49156, 49157, 49158, 49159, 49160,
 ];
@@ -99,6 +102,15 @@ pub struct Appliance {
     pin_dir: std::path::PathBuf,
     server_fingerprint: String,
     expected_device_id: Option<String>,
+    fast_requests: bool,
+    fast_fallback_used: bool,
+    fast_due_href: Option<String>,
+    observed: HashMap<u8, ObservedResource>,
+    resource_cache: HashMap<String, CachedResource>,
+    unavailable_resources: HashMap<String, Instant>,
+    poll_backoff: HashMap<String, Instant>,
+    tree_cache: Option<(Value, Instant)>,
+    observe_attempted_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug)]
@@ -106,12 +118,26 @@ struct ResourceLink {
     href: String,
     resource_types: Vec<String>,
     interfaces: Vec<String>,
+    observable: bool,
+}
+
+struct ObservedResource {
+    href: String,
+    sequence: Option<u32>,
+    active: bool,
+}
+
+struct CachedResource {
+    value: Value,
+    updated: Instant,
 }
 
 struct CoapResponse {
     code: u8,
     payload: Option<Vec<u8>>,
     block2: Option<(u32, bool, u8)>,
+    observe: Option<u32>,
+    token: u8,
 }
 
 impl Appliance {
@@ -249,6 +275,15 @@ impl Appliance {
             pin_dir: data_dir.join("ocf-server-pins"),
             server_fingerprint: fingerprint,
             expected_device_id,
+            fast_requests: false,
+            fast_fallback_used: false,
+            fast_due_href: None,
+            observed: HashMap::new(),
+            resource_cache: HashMap::new(),
+            unavailable_resources: HashMap::new(),
+            poll_backoff: HashMap::new(),
+            tree_cache: None,
+            observe_attempted_at: None,
         })
     }
 
@@ -264,7 +299,7 @@ impl Appliance {
     ) -> Result<(u8, Option<Value>), Error> {
         self.message_id = self.message_id.wrapping_add(1);
         let msg_id = self.message_id;
-        let token = (msg_id & 0xff) as u8;
+        let token = (msg_id & 0x7f) as u8;
         let message = encode_request(msg_id, token, method, path, payload)?;
         let response = self.exchange_confirmable(&message, msg_id, token)?;
         let value = response
@@ -283,7 +318,7 @@ impl Appliance {
         let mut block_size = 6_u8;
         let mut response_code = 0_u8;
         let mid = self.message_id;
-        let token = rand::thread_rng().gen::<u8>();
+        let token = rand::thread_rng().gen_range(0..=0x7f);
         for block_count in 0..64 {
             self.message_id = self.message_id.wrapping_add(1);
             let response = self.request_once(
@@ -299,14 +334,16 @@ impl Appliance {
             )?;
             response_code = response.code;
             if response.code >> 5 != 2 {
-                return Err(Error::new(
+                let mut error = Error::new(
                     "ocf_rejected",
                     format!(
                         "The appliance rejected OCF resource {path} (code {}.{:02})",
                         response.code >> 5,
                         response.code & 0x1f
                     ),
-                ));
+                );
+                error.ocf_response_code = Some(response.code);
+                return Err(error);
             }
             let bytes = response.payload.ok_or_else(|| {
                 Error::new(
@@ -350,6 +387,86 @@ impl Appliance {
     }
 
     fn get_resource(&mut self, href: &str) -> Result<Value, Error> {
+        if self
+            .unavailable_resources
+            .get(href)
+            .is_some_and(|retry_at| *retry_at > Instant::now())
+        {
+            return Err(Error::new(
+                "resource_unavailable",
+                "The appliance reports this optional resource as unavailable",
+            ));
+        }
+        if self.fast_requests
+            && self
+                .poll_backoff
+                .get(href)
+                .is_some_and(|retry_at| *retry_at > Instant::now())
+        {
+            return self
+                .resource_cache
+                .get(href)
+                .map(|cached| cached.value.clone())
+                .ok_or_else(|| Error::new("state_pending", "Resource read is in brief backoff"));
+        }
+        let observe_active = self
+            .observed
+            .values()
+            .any(|resource| resource.active && resource.href == href);
+        let cached = self.resource_cache.get(href);
+        let is_fresh =
+            cached.is_some_and(|value| value.updated.elapsed() < resource_poll_interval(href));
+        if observe_active && cached.is_some() {
+            return Ok(cached.expect("checked above").value.clone());
+        }
+        if self.fast_requests {
+            if is_fresh || self.fast_due_href.as_deref() != Some(href) || self.fast_fallback_used {
+                return cached.map(|value| value.value.clone()).ok_or_else(|| {
+                    Error::new(
+                        "state_pending",
+                        "Waiting for the next scheduled appliance resource read",
+                    )
+                });
+            }
+            self.fast_fallback_used = true;
+        } else if is_fresh {
+            return Ok(cached.expect("checked above").value.clone());
+        }
+        match self.get_resource_uncached(href) {
+            Ok(value) => {
+                self.unavailable_resources.remove(href);
+                self.poll_backoff.remove(href);
+                self.resource_cache.insert(
+                    href.to_string(),
+                    CachedResource {
+                        value: value.clone(),
+                        updated: Instant::now(),
+                    },
+                );
+                Ok(value)
+            }
+            Err(error) => {
+                if error.ocf_response_code.is_some_and(|code| code >> 5 == 4) {
+                    self.unavailable_resources
+                        .insert(href.to_string(), Instant::now() + Duration::from_secs(300));
+                }
+                if self.fast_requests && matches!(error.code, "timeout" | "network_error") {
+                    self.poll_backoff
+                        .insert(href.to_string(), Instant::now() + Duration::from_secs(2));
+                    if let Some(cached) = self.resource_cache.get(href) {
+                        return Ok(cached.value.clone());
+                    }
+                    return Err(Error::new(
+                        "state_pending",
+                        "Resource read is in brief backoff",
+                    ));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn get_resource_uncached(&mut self, href: &str) -> Result<Value, Error> {
         match self.get(href) {
             Ok(value) => Ok(value),
             Err(error)
@@ -400,7 +517,11 @@ impl Appliance {
             .map_or((path, None), |(path, query)| (path, Some(query)));
         let message =
             encode_request_full(self.message_id, token, method, path, payload, query, block2)?;
-        self.exchange_confirmable(&message, self.message_id, token)
+        if self.fast_requests {
+            self.exchange_confirmable_fast(&message, self.message_id, token)
+        } else {
+            self.exchange_confirmable(&message, self.message_id, token)
+        }
     }
 
     fn exchange_confirmable(
@@ -409,13 +530,40 @@ impl Appliance {
         message_id: u16,
         token: u8,
     ) -> Result<CoapResponse, Error> {
+        self.exchange_confirmable_with_policy(
+            message,
+            message_id,
+            token,
+            COAP_ACK_TIMEOUT_MIN_MS,
+            COAP_ACK_TIMEOUT_MAX_MS,
+            COAP_MAX_RETRANSMITS,
+        )
+    }
+
+    fn exchange_confirmable_fast(
+        &mut self,
+        message: &[u8],
+        message_id: u16,
+        token: u8,
+    ) -> Result<CoapResponse, Error> {
+        self.exchange_confirmable_with_policy(message, message_id, token, 120, 200, 1)
+    }
+
+    fn exchange_confirmable_with_policy(
+        &mut self,
+        message: &[u8],
+        message_id: u16,
+        token: u8,
+        timeout_min_ms: u64,
+        timeout_max_ms: u64,
+        max_retransmits: usize,
+    ) -> Result<CoapResponse, Error> {
         // These requests are CON messages. Retry the identical MID/token so
         // the appliance can deduplicate a delayed response after packet loss.
-        let mut ack_timeout_ms =
-            rand::thread_rng().gen_range(COAP_ACK_TIMEOUT_MIN_MS..=COAP_ACK_TIMEOUT_MAX_MS);
+        let mut ack_timeout_ms = rand::thread_rng().gen_range(timeout_min_ms..=timeout_max_ms);
         let mut acknowledged = false;
         let mut buf = [0_u8; 16 * 1024];
-        for retransmission in 0..=COAP_MAX_RETRANSMITS {
+        for retransmission in 0..=max_retransmits {
             let timeout = Duration::from_millis(ack_timeout_ms);
             if retransmission == 0 || !acknowledged {
                 self.stream.write_all(message).map_err(|_| {
@@ -470,7 +618,12 @@ impl Appliance {
                 if message_type == 0 {
                     self.ack_confirmable(&buf[..n])?;
                 }
-                if n < 4 + tkl || tkl == 0 || buf.get(4) != Some(&token) {
+                if n < 4 + tkl || tkl == 0 {
+                    continue;
+                }
+                let packet_token = buf[4];
+                if packet_token != token {
+                    self.accept_observe_packet(&buf[..n]);
                     continue;
                 }
                 return decode_packet(&buf[..n]);
@@ -570,6 +723,17 @@ impl Appliance {
             }
         }
         Ok(device)
+    }
+
+    pub fn read_state_fast(&mut self) -> Result<Snapshot, Error> {
+        self.pump_observers()?;
+        self.fast_requests = true;
+        self.fast_fallback_used = false;
+        self.fast_due_href = self.next_fallback_href();
+        let result = self.read_state();
+        self.fast_requests = false;
+        self.fast_due_href = None;
+        result
     }
 
     pub fn read_state(&mut self) -> Result<Snapshot, Error> {
@@ -687,7 +851,252 @@ impl Appliance {
             }
         }
         snapshot.raw_values = collect;
+        self.register_state_observers();
         Ok(snapshot)
+    }
+
+    fn register_state_observers(&mut self) {
+        if self
+            .observe_attempted_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(60))
+        {
+            return;
+        }
+        self.observe_attempted_at = Some(Instant::now());
+        let targets = self
+            .state_resource_hrefs()
+            .into_iter()
+            .filter(|href| {
+                self.resource_catalog
+                    .iter()
+                    .any(|link| link.href == *href && link.observable)
+            })
+            .collect::<Vec<_>>();
+        for (slot, href) in targets.into_iter().enumerate() {
+            if slot >= 128 {
+                break;
+            }
+            if self
+                .observed
+                .values()
+                .any(|resource| resource.href == href && resource.active)
+            {
+                continue;
+            }
+            let token = 0x80_u8.wrapping_add(slot as u8);
+            self.observed.insert(
+                token,
+                ObservedResource {
+                    href: href.clone(),
+                    sequence: None,
+                    active: false,
+                },
+            );
+            self.message_id = self.message_id.wrapping_add(1);
+            let message_id = self.message_id;
+            let message =
+                match encode_request_with_observe(message_id, token, 1, &href, None, Some(0)) {
+                    Ok(message) => message,
+                    Err(_) => {
+                        self.observed.remove(&token);
+                        continue;
+                    }
+                };
+            let response = self.exchange_confirmable_fast(&message, message_id, token);
+            match response {
+                Ok(response) if response.code >> 5 == 2 && response.observe.is_some() => {
+                    if let Some(observer) = self.observed.get_mut(&token) {
+                        observer.active = true;
+                    }
+                    self.cache_observe_payload(
+                        &href,
+                        response.observe,
+                        response.payload.as_deref(),
+                    );
+                }
+                _ => {
+                    self.observed.remove(&token);
+                }
+            }
+        }
+        let active = self
+            .observed
+            .values()
+            .filter(|observer| observer.active)
+            .count();
+        let advertised = self
+            .state_resource_hrefs()
+            .iter()
+            .filter(|href| {
+                self.resource_catalog
+                    .iter()
+                    .any(|link| link.href == href.as_str() && link.observable)
+            })
+            .count();
+        eprintln!(
+            "INFO: OCF Observe active for {active}/{advertised} advertised state resources; remaining resources use scheduled polling"
+        );
+    }
+
+    fn state_resource_hrefs(&self) -> Vec<String> {
+        let mut targets = Vec::new();
+        for fragments in [
+            &(["power"][..]),
+            &["temperature", "desired"][..],
+            &["temperatures"][..],
+            &["temperature", "current"][..],
+            &["humidity"][..],
+            &["energy", "consumption"][..],
+            &["mode"][..],
+            &["wind", "strength"][..],
+            &["mode", "convenient"][..],
+            &["hass", "state"][..],
+        ] {
+            let href = if *fragments == ["mode"][..] {
+                self.find_mode_href()
+            } else if *fragments == ["humidity"][..] {
+                self.find_samsung_href(fragments)
+                    .or_else(|| self.find_resource_href(fragments))
+            } else if *fragments == ["energy", "consumption"][..] {
+                self.find_samsung_href(fragments)
+                    .or_else(|| self.find_resource_href(fragments))
+            } else if *fragments == ["temperature", "desired"][..] {
+                self.find_samsung_href(fragments)
+                    .or_else(|| self.find_samsung_href(&["temperatures"]))
+            } else {
+                self.find_samsung_href(fragments)
+            };
+            if let Some(href) = href {
+                if !targets.contains(&href) {
+                    targets.push(href);
+                }
+            }
+        }
+        targets
+    }
+
+    fn next_fallback_href(&self) -> Option<String> {
+        self.state_resource_hrefs()
+            .into_iter()
+            .filter(|href| {
+                !self
+                    .observed
+                    .values()
+                    .any(|resource| resource.active && resource.href == *href)
+                    && !self
+                        .unavailable_resources
+                        .get(href)
+                        .is_some_and(|retry_at| *retry_at > Instant::now())
+                    && !self
+                        .poll_backoff
+                        .get(href)
+                        .is_some_and(|retry_at| *retry_at > Instant::now())
+            })
+            .filter_map(|href| {
+                let interval = resource_poll_interval(&href);
+                let (age, missing) = self
+                    .resource_cache
+                    .get(&href)
+                    .map(|resource| (resource.updated.elapsed(), false))
+                    .unwrap_or((Duration::ZERO, true));
+                let overdue = if missing {
+                    f64::MAX
+                } else {
+                    age.as_secs_f64() / interval.as_secs_f64()
+                };
+                (missing || age >= interval).then_some((href, overdue))
+            })
+            .max_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(href, _)| href)
+    }
+
+    fn cache_observe_payload(&mut self, href: &str, sequence: Option<u32>, payload: Option<&[u8]>) {
+        let Some(payload) = payload else { return };
+        let Ok(value) = ciborium::de::from_reader::<Value, _>(payload) else {
+            return;
+        };
+        let value = unwrap_single_map_envelope(value);
+        self.resource_cache.insert(
+            href.to_string(),
+            CachedResource {
+                value,
+                updated: Instant::now(),
+            },
+        );
+        if let Some(sequence) = sequence {
+            for observer in self
+                .observed
+                .values_mut()
+                .filter(|entry| entry.href == href)
+            {
+                observer.sequence = Some(sequence);
+            }
+        }
+    }
+
+    fn accept_observe_packet(&mut self, packet: &[u8]) {
+        let Ok(response) = decode_packet(packet) else {
+            return;
+        };
+        if response.code >> 5 != 2 {
+            return;
+        }
+        let Some(sequence) = response.observe else {
+            return;
+        };
+        let Some(observer) = self.observed.get(&response.token) else {
+            return;
+        };
+        if !observer.active {
+            return;
+        }
+        if let Some(previous) = observer.sequence {
+            let distance = sequence.wrapping_sub(previous) & 0x00ff_ffff;
+            if distance == 0 || distance >= 0x0080_0000 {
+                return;
+            }
+        }
+        let href = observer.href.clone();
+        self.cache_observe_payload(&href, Some(sequence), response.payload.as_deref());
+    }
+
+    fn pump_observers(&mut self) -> Result<(), Error> {
+        if !self.observed.values().any(|observer| observer.active) {
+            return Ok(());
+        }
+        let mut buf = [0_u8; 16 * 1024];
+        self.stream
+            .get_mut()
+            .0
+            .set_read_timeout(Some(Duration::from_millis(5)))
+            .map_err(|_| Error::new("network_error", "Could not configure OCF receive timeout"))?;
+        for _ in 0..64 {
+            let n = match self.stream.read(&mut buf) {
+                Ok(n) => n,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    break;
+                }
+                Err(_) => {
+                    return Err(Error::new(
+                        "network_error",
+                        "The local OCF connection was interrupted",
+                    ));
+                }
+            };
+            if n < 5 {
+                continue;
+            }
+            if (buf[0] >> 4) & 0x03 == 0 {
+                self.ack_confirmable(&buf[..n])?;
+            }
+            self.accept_observe_packet(&buf[..n]);
+        }
+        Ok(())
     }
 
     pub fn read_capabilities(&mut self) -> Result<JsonValue, Error> {
@@ -959,6 +1368,11 @@ impl Appliance {
     }
 
     fn read_device_tree(&mut self) -> Result<Option<Value>, Error> {
+        if let Some((tree, updated)) = &self.tree_cache {
+            if updated.elapsed() < Duration::from_secs(2) {
+                return Ok(Some(tree.clone()));
+            }
+        }
         let has_hass_route = self
             .resource_catalog
             .iter()
@@ -976,6 +1390,7 @@ impl Appliance {
                 self.resource_catalog.push(link);
             }
         }
+        self.tree_cache = Some((tree.clone(), Instant::now()));
         Ok(Some(tree))
     }
 
@@ -1586,9 +2001,25 @@ fn parse_resource_catalog(value: &Value) -> Vec<ResourceLink> {
                 href: text(link, "href")?,
                 resource_types: text_array(link, "rt"),
                 interfaces: text_array(link, "if"),
+                observable: get(link, "p")
+                    .and_then(|properties| get(properties, "bm"))
+                    .and_then(as_number)
+                    .filter(|bits| bits.is_finite() && *bits >= 0.0)
+                    .is_some_and(|bits| (bits as u64 & OCF_OBSERVABLE_BIT) != 0),
             })
         })
         .collect()
+}
+
+fn resource_poll_interval(href: &str) -> Duration {
+    let href = href.to_ascii_lowercase();
+    if href.contains("energy") || href.contains("consumption") {
+        Duration::from_secs(10)
+    } else if href.contains("humidity") || href.contains("current") || href.contains("ambient") {
+        Duration::from_secs(2)
+    } else {
+        Duration::from_millis(500)
+    }
 }
 
 fn tree_entries(value: &Value) -> Vec<(String, &Value)> {
@@ -2017,8 +2448,38 @@ fn encode_request_full(
     query: Option<&str>,
     block2: Option<(u32, u8)>,
 ) -> Result<Vec<u8>, Error> {
+    encode_request_full_with_observe(mid, token, method, path, payload, query, block2, None)
+}
+
+fn encode_request_with_observe(
+    mid: u16,
+    token: u8,
+    method: u8,
+    path: &str,
+    payload: Option<&Value>,
+    observe: Option<u32>,
+) -> Result<Vec<u8>, Error> {
+    encode_request_full_with_observe(mid, token, method, path, payload, None, None, observe)
+}
+
+fn encode_request_full_with_observe(
+    mid: u16,
+    token: u8,
+    method: u8,
+    path: &str,
+    payload: Option<&Value>,
+    query: Option<&str>,
+    block2: Option<(u32, u8)>,
+    observe: Option<u32>,
+) -> Result<Vec<u8>, Error> {
     let mut message = vec![0x41, method, (mid >> 8) as u8, mid as u8, token];
     let mut last_option = 0_u16;
+    if let Some(value) = observe {
+        let bytes = value.to_be_bytes();
+        let first_nonzero = bytes.iter().position(|byte| *byte != 0);
+        let encoded = first_nonzero.map_or(&[][..], |index| &bytes[index..]);
+        encode_option(&mut message, &mut last_option, COAP_OBSERVE, encoded)?;
+    }
     for segment in path.trim_matches('/').split('/') {
         let value = segment.as_bytes();
         encode_option(&mut message, &mut last_option, 11, value)?;
@@ -2034,11 +2495,9 @@ fn encode_request_full(
     if let Some((number, size_exponent)) = block2 {
         let value = (number << 4) | (size_exponent as u32 & 0x07);
         let bytes = value.to_be_bytes();
-        let first_nonzero = bytes
-            .iter()
-            .position(|byte| *byte != 0)
-            .unwrap_or(bytes.len() - 1);
-        encode_option(&mut message, &mut last_option, 23, &bytes[first_nonzero..])?;
+        let first_nonzero = bytes.iter().position(|byte| *byte != 0);
+        let encoded = first_nonzero.map_or(&[][..], |index| &bytes[index..]);
+        encode_option(&mut message, &mut last_option, 23, encoded)?;
     }
     if let Some(payload) = payload {
         message.push(0xff);
@@ -2102,9 +2561,11 @@ fn decode_packet(data: &[u8]) -> Result<CoapResponse, Error> {
         return Err(Error::new("invalid_response", "Malformed CoAP token"));
     }
     let code = data[1];
+    let token = data.get(4).copied().unwrap_or_default();
     let mut cursor = 4 + tkl;
     let mut option_number = 0_u16;
     let mut block2 = None;
+    let mut observe = None;
     while cursor < data.len() {
         if data[cursor] == 0xff {
             cursor += 1;
@@ -2115,6 +2576,8 @@ fn decode_packet(data: &[u8]) -> Result<CoapResponse, Error> {
                 code,
                 payload: Some(data[cursor..].to_vec()),
                 block2,
+                observe,
+                token,
             });
         }
         let header = data[cursor];
@@ -2135,6 +2598,15 @@ fn decode_packet(data: &[u8]) -> Result<CoapResponse, Error> {
                 value = (value << 8) | *byte as u32;
             }
             block2 = Some((value >> 4, (value & 0x08) != 0, (value & 0x07) as u8));
+        } else if option_number == COAP_OBSERVE {
+            if length > 3 {
+                return Err(Error::new("invalid_response", "Invalid CoAP Observe value"));
+            }
+            let mut value = 0_u32;
+            for byte in &data[cursor..cursor + length] {
+                value = (value << 8) | *byte as u32;
+            }
+            observe = Some(value & 0x00ff_ffff);
         }
         cursor += length;
     }
@@ -2142,6 +2614,8 @@ fn decode_packet(data: &[u8]) -> Result<CoapResponse, Error> {
         code,
         payload: None,
         block2,
+        observe,
+        token,
     })
 }
 

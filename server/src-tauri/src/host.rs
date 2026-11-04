@@ -8,10 +8,14 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     routing::{get, post},
     Json, Router,
 };
+use futures_util::stream;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -24,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 use tokio::{
     net::{TcpListener, UdpSocket},
-    sync::Mutex,
+    sync::{broadcast, Mutex},
     task::JoinHandle,
     time,
 };
@@ -57,6 +61,8 @@ struct HostInner {
     offline_alert_sent: Mutex<bool>,
     reconnect_attempt: Mutex<u32>,
     next_reconnect_at: Mutex<Option<time::Instant>>,
+    updates: broadcast::Sender<()>,
+    appliance_transition: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -147,6 +153,7 @@ impl HostService {
         } else {
             BTreeMap::new()
         };
+        let (updates, _) = broadcast::channel(32);
         let result = Self(Arc::new(HostInner {
             app,
             storage,
@@ -167,6 +174,8 @@ impl HostService {
             offline_alert_sent: Mutex::new(false),
             reconnect_attempt: Mutex::new(0),
             next_reconnect_at: Mutex::new(None),
+            updates,
+            appliance_transition: Mutex::new(()),
         }));
         {
             let mut state = result.0.state.lock().await;
@@ -230,6 +239,7 @@ impl HostService {
             .route("/v1/pairings", post(pair_create))
             .route("/v1/pairings/:request_id", get(pair_status))
             .route("/v1/state", get(api_state))
+            .route("/v1/events", get(api_events))
             .route("/v1/commands", post(api_command))
             .fallback(not_found)
             .method_not_allowed_fallback(method_not_allowed)
@@ -373,7 +383,7 @@ impl HostService {
                         let device =
                             json!({"id":appliance.id,"host":appliance.host,"name":appliance.name});
                         if let Err(error) = monitor
-                            .refresh_appliance(device, Some(appliance.name))
+                            .refresh_appliance_state(device, Some(appliance.name))
                             .await
                         {
                             let mut s = monitor.0.state.lock().await;
@@ -470,6 +480,22 @@ impl HostService {
             }
         });
         self.0.network.lock().await.push(task);
+        let live_host = self.clone();
+        let live_task = tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_millis(100));
+            interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                match live_host.refresh_live_appliance().await {
+                    Ok(true) => live_host.emit().await,
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::debug!(%error, "Fast Samsung state refresh failed; retaining the last known state");
+                    }
+                }
+            }
+        });
+        self.0.network.lock().await.push(live_task);
         Ok(())
     }
 
@@ -506,7 +532,9 @@ impl HostService {
         s
     }
     async fn emit(&self) {
-        let _ = self.0.app.emit("host-state-changed", self.view().await);
+        let view = self.view().await;
+        let _ = self.0.app.emit("host-state-changed", view);
+        let _ = self.0.updates.send(());
     }
     async fn alert(&self, kind: &str, title: &str, message: &str) {
         if !*self.0.alerts_enabled.lock().await {
@@ -534,6 +562,7 @@ impl HostService {
         self.0.storage.write_json("host_settings.json", &*settings)
     }
     async fn reconnect_saved(&self) -> Result<(), String> {
+        let _transition = self.0.appliance_transition.lock().await;
         let settings = self.0.settings.lock().await.clone();
         let address = settings
             .get("applianceHost")
@@ -674,6 +703,7 @@ impl HostService {
         id: Option<String>,
         port: Option<u16>,
     ) -> Result<(), String> {
+        let _transition = self.0.appliance_transition.lock().await;
         let connected = self
             .0
             .bridge
@@ -710,6 +740,77 @@ impl HostService {
         let raw_state = bridge.call("state", Value::Null).await?;
         let caps = bridge.call("capabilities", Value::Null).await?;
         drop(bridge);
+        self.apply_appliance_snapshot(device, configured_name, raw_state, caps, true)
+            .await
+            .map(|_| ())
+    }
+
+    async fn refresh_live_appliance(&self) -> Result<bool, String> {
+        let _transition = self.0.appliance_transition.lock().await;
+        let current = {
+            let state = self.0.state.lock().await;
+            if state.appliance_connection != "connected" {
+                return Ok(false);
+            }
+            state
+                .appliance
+                .clone()
+                .ok_or("Nenhum aparelho conectado.")?
+        };
+        let raw_state = self
+            .0
+            .bridge
+            .lock()
+            .await
+            .call("liveState", Value::Null)
+            .await?;
+        let device =
+            json!({"id":current.id,"host":current.host,"name":current.name,"model":current.model});
+        self.apply_appliance_snapshot(
+            device,
+            Some(current.name.clone()),
+            raw_state,
+            current.raw_capabilities.clone(),
+            false,
+        )
+        .await
+    }
+
+    async fn refresh_appliance_state(
+        &self,
+        device: Value,
+        configured_name: Option<String>,
+    ) -> Result<(), String> {
+        let _transition = self.0.appliance_transition.lock().await;
+        let raw_state = self
+            .0
+            .bridge
+            .lock()
+            .await
+            .call("liveState", Value::Null)
+            .await?;
+        let caps = self
+            .0
+            .state
+            .lock()
+            .await
+            .appliance
+            .as_ref()
+            .map(|appliance| appliance.raw_capabilities.clone())
+            .ok_or("Nenhum aparelho conectado.")?;
+        self.apply_appliance_snapshot(device, configured_name, raw_state, caps, true)
+            .await
+            .map(|_| ())
+    }
+
+    async fn apply_appliance_snapshot(
+        &self,
+        device: Value,
+        configured_name: Option<String>,
+        raw_state: Value,
+        caps: Value,
+        persist: bool,
+    ) -> Result<bool, String> {
         let dev_id = device
             .get("id")
             .and_then(Value::as_str)
@@ -797,19 +898,41 @@ impl HostService {
             features,
             raw_capabilities: caps.clone(),
         };
-        if let Some(wh) = raw_state.get("cumulativeEnergyWh").and_then(Value::as_f64) {
-            self.0.energy.lock().await.record(wh);
+        let (old_appliance, was_connected) = {
+            let state = self.0.state.lock().await;
+            (
+                state.appliance.clone(),
+                state.appliance_connection == "connected",
+            )
+        };
+        let old_cumulative = old_appliance
+            .as_ref()
+            .and_then(|old| old.cumulative_energy_wh);
+        let new_cumulative = appliance.cumulative_energy_wh;
+        if new_cumulative.is_some() && new_cumulative != old_cumulative {
+            if let Some(wh) = new_cumulative {
+                self.0.energy.lock().await.record(wh);
+            }
         }
+        let changed = !was_connected
+            || old_appliance
+                .as_ref()
+                .and_then(|old| serde_json::to_value(old).ok())
+                != serde_json::to_value(&appliance).ok();
         let mut s = self.0.state.lock().await;
         s.appliance = Some(appliance);
         s.selected_appliance_id = Some(dev_id);
         s.appliance_connection = "connected".into();
         s.appliance_error = None;
-        self.persist_energy().await?;
-        Ok(())
+        drop(s);
+        if persist {
+            self.persist_energy().await?;
+        }
+        Ok(changed)
     }
 
     pub async fn control(&self, kind: &str, value: Value) -> Result<(), String> {
+        let _transition = self.0.appliance_transition.lock().await;
         tracing::info!(control = kind, "Appliance control requested");
         let appliance = self
             .0
@@ -1264,7 +1387,10 @@ async fn api_state(State(host): State<HostService>, headers: HeaderMap) -> impl 
     if let Err(x) = host.authorize(&headers, None).await {
         return x;
     }
-    let s = host.view().await;
+    Json(api_state_payload(host.view().await)).into_response()
+}
+
+fn api_state_payload(s: HostViewState) -> Value {
     let a = s.appliance;
     let connected = s.appliance_connection == "connected" && a.is_some();
     let (device, state, caps) = if let Some(a) = a.filter(|_| connected) {
@@ -1280,8 +1406,70 @@ async fn api_state(State(host): State<HostService>, headers: HeaderMap) -> impl 
             json!({"power":false,"temperature":null,"modes":[],"fanSpeeds":[],"windFree":false}),
         )
     };
-    let result = json!({"connected":connected,"device":device,"state":state,"capabilities":caps,"error":s.appliance_error,"energy":s.energy_usage});
-    (StatusCode::OK, Json(result)).into_response()
+    json!({"connected":connected,"device":device,"state":state,"capabilities":caps,"error":s.appliance_error,"energy":s.energy_usage})
+}
+
+async fn api_events(State(host): State<HostService>, headers: HeaderMap) -> Response {
+    if let Some(response) = reject_origin(&headers) {
+        return response;
+    }
+    if let Err(response) = host.authorize(&headers, None).await {
+        return response;
+    }
+    let receiver = host.0.updates.subscribe();
+    let auth_headers = headers.clone();
+    let reauthorize_at = time::Instant::now() + Duration::from_secs(15);
+    let events = stream::unfold(
+        (host, receiver, auth_headers, true, reauthorize_at),
+        |(host, mut receiver, headers, initial, mut reauthorize_at)| async move {
+            if initial {
+                let payload = serde_json::to_string(&api_state_payload(host.view().await))
+                    .unwrap_or_else(|_| "{}".into());
+                return Some((
+                    Ok::<Event, std::convert::Infallible>(
+                        Event::default().event("state").data(payload),
+                    ),
+                    (host, receiver, headers, false, reauthorize_at),
+                ));
+            }
+            loop {
+                tokio::select! {
+                    update = receiver.recv() => {
+                        match update {
+                            Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                                let payload = serde_json::to_string(&api_state_payload(host.view().await))
+                                    .unwrap_or_else(|_| "{}".into());
+                                return Some((
+                                    Ok(Event::default().event("state").data(payload)),
+                                    (host, receiver, headers, false, reauthorize_at),
+                                ));
+                            }
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                    _ = time::sleep_until(reauthorize_at) => {
+                        if host.authorize(&headers, None).await.is_err() {
+                            return None;
+                        }
+                        reauthorize_at = time::Instant::now() + Duration::from_secs(15);
+                        let payload = serde_json::to_string(&api_state_payload(host.view().await))
+                            .unwrap_or_else(|_| "{}".into());
+                        return Some((
+                            Ok(Event::default().event("state").data(payload)),
+                            (host, receiver, headers, false, reauthorize_at),
+                        ));
+                    }
+                }
+            }
+        },
+    );
+    Sse::new(events)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("windfull"),
+        )
+        .into_response()
 }
 async fn api_command(
     State(host): State<HostService>,

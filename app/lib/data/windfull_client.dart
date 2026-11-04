@@ -180,6 +180,72 @@ class WindfullClient {
   Future<Map<String, dynamic>> getState(PairingCredential credential) =>
       _requestCredential(credential, 'GET', '/v1/state');
 
+  Stream<Map<String, dynamic>> watchState(
+    PairingCredential credential, {
+    void Function(bool connected)? onConnectionChanged,
+  }) async* {
+    var retryDelay = const Duration(milliseconds: 300);
+    while (true) {
+      final server = _serverForCredential(credential);
+      final client = _newHttpClient(server);
+      try {
+        final request = await client
+            .getUrl(Uri(
+              scheme: 'https',
+              host: server.host,
+              port: server.port,
+              path: '/v1/events',
+            ))
+            .timeout(const Duration(seconds: 5));
+        request.headers.set(HttpHeaders.acceptHeader, 'text/event-stream');
+        request.headers.set('X-Windfull-Client', credential.clientId);
+        request.headers.set(
+          HttpHeaders.authorizationHeader,
+          'Bearer ${credential.secret}',
+        );
+        final response = await request.close().timeout(const Duration(seconds: 5));
+        if (response.statusCode == HttpStatus.unauthorized) {
+          throw const WindfullUnauthorizedException();
+        }
+        if (response.statusCode != HttpStatus.ok ||
+            response.headers.contentType?.mimeType != 'text/event-stream') {
+          throw WindfullException(
+            'O computador recusou o fluxo de atualizações (HTTP ${response.statusCode}).',
+          );
+        }
+        onConnectionChanged?.call(true);
+        retryDelay = const Duration(milliseconds: 300);
+        final data = StringBuffer();
+        await for (final line in response
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
+          if (line.isEmpty) {
+            if (data.isNotEmpty) {
+              final decoded = _decodeStateEvent(data.toString());
+              data.clear();
+              yield decoded;
+            }
+          } else if (line.startsWith('data:')) {
+            if (data.isNotEmpty) data.write('\n');
+            data.write(line.substring(5).trimLeft());
+          }
+        }
+        onConnectionChanged?.call(false);
+      } on WindfullUnauthorizedException {
+        onConnectionChanged?.call(false);
+        rethrow;
+      } on Object {
+        onConnectionChanged?.call(false);
+      } finally {
+        client.close(force: true);
+      }
+      await Future<void>.delayed(retryDelay);
+      retryDelay = Duration(
+        milliseconds: (retryDelay.inMilliseconds * 2).clamp(300, 5000).toInt(),
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> command(
     PairingCredential credential,
     String type,
@@ -197,13 +263,7 @@ class WindfullClient {
     Map<String, Object?>? body,
   }) =>
       _request(
-        DiscoveredServer(
-          id: credential.serverId,
-          name: credential.serverId,
-          host: credential.host,
-          port: credential.port,
-          fingerprint: credential.fingerprint,
-        ),
+        _serverForCredential(credential),
         method,
         path,
         body: body,
@@ -219,11 +279,7 @@ class WindfullClient {
     String? clientId,
     String? secret,
   }) async {
-    final context = SecurityContext(withTrustedRoots: false);
-    final client = HttpClient(context: context)
-      ..connectionTimeout = const Duration(seconds: 5)
-      ..badCertificateCallback = (certificate, host, port) =>
-          sha256.convert(certificate.der).toString() == server.fingerprint;
+    final client = _newHttpClient(server);
     try {
       final request = await client
           .openUrl(
@@ -276,6 +332,33 @@ class WindfullClient {
     } finally {
       client.close(force: true);
     }
+  }
+
+  HttpClient _newHttpClient(DiscoveredServer server) {
+    final context = SecurityContext(withTrustedRoots: false);
+    return HttpClient(context: context)
+      ..connectionTimeout = const Duration(seconds: 5)
+      ..badCertificateCallback = (certificate, host, port) =>
+          sha256.convert(certificate.der).toString() == server.fingerprint;
+  }
+
+  DiscoveredServer _serverForCredential(PairingCredential credential) =>
+      DiscoveredServer(
+        id: credential.serverId,
+        name: credential.serverId,
+        host: credential.host,
+        port: credential.port,
+        fingerprint: credential.fingerprint,
+      );
+
+  Map<String, dynamic> _decodeStateEvent(String data) {
+    try {
+      final value = jsonDecode(data);
+      if (value is Map<String, dynamic>) return value;
+    } on Object {
+      throw const WindfullException('O computador enviou um evento inválido.');
+    }
+    throw const WindfullException('O computador enviou um evento inválido.');
   }
 
   String _randomHex(int byteCount) => List<int>.generate(byteCount, (_) => _random.nextInt(256))

@@ -5379,6 +5379,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "chrono",
+ "futures-util",
  "hex",
  "hmac",
  "local-ip-address",

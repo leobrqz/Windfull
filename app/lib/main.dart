@@ -134,6 +134,9 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
   DateTime _lastRediscovery = DateTime.fromMillisecondsSinceEpoch(0);
   int _consecutiveServerFailures = 0;
   Timer? _pollTimer;
+  StreamSubscription<Map<String, dynamic>>? _stateSubscription;
+  bool _eventsConnected = false;
+  int _eventGeneration = 0;
 
   @override
   void initState() {
@@ -142,14 +145,17 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
     _discover();
     unawaited(_updates.initialize());
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 4),
-      (_) => _refreshState(),
+      const Duration(seconds: 1),
+      (_) {
+        if (!_eventsConnected) _refreshState();
+      },
     );
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
+    unawaited(_stateSubscription?.cancel());
     _updates.dispose();
     super.dispose();
   }
@@ -157,7 +163,61 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
   Future<void> _restore() async {
     final credential = await _pairingStore.read();
     if (mounted) setState(() => _credential = credential);
-    if (credential != null) _refreshState();
+    if (credential != null) {
+      _startStateEvents(credential);
+      _refreshState();
+    }
+  }
+
+  void _startStateEvents(PairingCredential credential) {
+    final generation = ++_eventGeneration;
+    unawaited(_stateSubscription?.cancel());
+    _eventsConnected = false;
+    _stateSubscription = _client
+        .watchState(
+          credential,
+          onConnectionChanged: (connected) {
+            if (!mounted ||
+                generation != _eventGeneration ||
+                _eventsConnected == connected) {
+              return;
+            }
+            setState(() => _eventsConnected = connected);
+          },
+        )
+        .listen(
+          _acceptSnapshot,
+          onError: (Object error) {
+            if (error is WindfullUnauthorizedException) {
+              unawaited(_clearRevokedCredential(error));
+            }
+          },
+          cancelOnError: true,
+        );
+  }
+
+  void _acceptSnapshot(Map<String, dynamic> value) {
+    if (!mounted) return;
+    setState(() {
+      _snapshot = value;
+      _connectionError = null;
+      _deviceError = value['error'] as String?;
+      _consecutiveServerFailures = 0;
+    });
+  }
+
+  Future<void> _clearRevokedCredential(WindfullUnauthorizedException error) async {
+    await _pairingStore.clear();
+    ++_eventGeneration;
+    unawaited(_stateSubscription?.cancel());
+    if (!mounted) return;
+    setState(() {
+      _credential = null;
+      _snapshot = null;
+      _connectionError = error.message;
+      _deviceError = null;
+      _eventsConnected = false;
+    });
   }
 
   Future<void> _refreshState() async {
@@ -174,14 +234,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         _consecutiveServerFailures = 0;
       });
     } on WindfullUnauthorizedException catch (error) {
-      await _pairingStore.clear();
-      if (!mounted) return;
-      setState(() {
-        _credential = null;
-        _snapshot = null;
-        _connectionError = error.message;
-        _deviceError = null;
-      });
+      await _clearRevokedCredential(error);
     } on Object {
       _consecutiveServerFailures++;
       if (_consecutiveServerFailures < 2) return;
@@ -217,6 +270,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
               _credential = updated;
               _connectionError = null;
             });
+            _startStateEvents(updated);
           }
         }
       }
@@ -299,7 +353,10 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
           fingerprint: saved.fingerprint,
         );
         await _pairingStore.save(moved);
-        if (mounted) setState(() => _credential = moved);
+        if (mounted) {
+          setState(() => _credential = moved);
+          _startStateEvents(moved);
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -319,6 +376,9 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
 
   Future<void> _unlink() async {
     await _pairingStore.clear();
+    ++_eventGeneration;
+    unawaited(_stateSubscription?.cancel());
+    _eventsConnected = false;
     if (!mounted) return;
     setState(() {
       _credential = null;
@@ -406,6 +466,7 @@ class _RemoteHomePageState extends State<RemoteHomePage> {
         _connectionError = null;
         _deviceError = null;
       });
+      _startStateEvents(credential);
       await _refreshState();
     } on Object catch (error) {
       if (mounted) setState(() => _connectionError = error.toString());

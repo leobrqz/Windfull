@@ -142,6 +142,14 @@ fn dispatch(
                 .map_err(protocol_error)?;
             serde_json::to_value(state).map_err(|_| internal_error())
         }
+        "liveState" => {
+            let state = appliance
+                .as_mut()
+                .ok_or_else(not_connected)?
+                .read_state_fast()
+                .map_err(protocol_error)?;
+            serde_json::to_value(state).map_err(|_| internal_error())
+        }
         "capabilities" => {
             let value = appliance
                 .as_mut()

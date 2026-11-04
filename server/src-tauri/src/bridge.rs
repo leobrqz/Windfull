@@ -125,7 +125,27 @@ fn log_bridge_stderr(stderr: ChildStderr) -> JoinHandle<()> {
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    tracing::warn!(target: "samsung_bridge", message = %line, "Samsung OCF bridge stderr");
+                    if let Some((level, message)) = line.split_once(": ") {
+                        match level {
+                            "DEBUG" => {
+                                tracing::debug!(target: "samsung_bridge", %message, "Samsung OCF bridge")
+                            }
+                            "INFO" => {
+                                tracing::info!(target: "samsung_bridge", %message, "Samsung OCF bridge")
+                            }
+                            "WARN" => {
+                                tracing::warn!(target: "samsung_bridge", %message, "Samsung OCF bridge")
+                            }
+                            "ERROR" => {
+                                tracing::error!(target: "samsung_bridge", %message, "Samsung OCF bridge")
+                            }
+                            _ => {
+                                tracing::warn!(target: "samsung_bridge", message = %line, "Samsung OCF bridge stderr")
+                            }
+                        }
+                    } else {
+                        tracing::warn!(target: "samsung_bridge", message = %line, "Samsung OCF bridge stderr");
+                    }
                 }
                 Ok(None) => break,
                 Err(error) => {
