@@ -24,7 +24,7 @@ Future<void> main() async {
     );
     await windowManager.waitUntilReadyToShow(options, () async {
       await windowManager.setAsFrameless();
-      await windowManager.setHasShadow(true);
+      await windowManager.setHasShadow(false);
       await windowManager.setResizable(false);
       await windowManager.setMaximizable(false);
       await windowManager.hide();

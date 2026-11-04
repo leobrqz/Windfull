@@ -59,7 +59,7 @@ class _WindfullDesktopHostState extends State<WindfullDesktopHost>
     await windowManager.setAlwaysOnTop(true);
     await windowManager.setSkipTaskbar(true);
     await windowManager.setAsFrameless();
-    await windowManager.setHasShadow(true);
+    await windowManager.setHasShadow(false);
 
     final iconBytes = await rootBundle.load('assets/windfull_tray.ico');
     final supportDirectory = await getApplicationSupportDirectory();

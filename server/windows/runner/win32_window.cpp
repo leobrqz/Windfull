@@ -18,6 +18,12 @@ namespace {
 
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 
+// Windows 11 draws an accent-colored outline around borderless windows by
+// default. DWMWA_COLOR_NONE suppresses only that system border while leaving
+// the transparent Flutter surface and its rounded corners intact.
+constexpr auto kDwmwaBorderColor = static_cast<DWMWINDOWATTRIBUTE>(34);
+constexpr COLORREF kDwmColorNone = 0xFFFFFFFE;
+
 /// Registry key for app theme preference.
 ///
 /// A value of 0 indicates apps should use dark mode. A non-zero or missing
@@ -273,6 +279,9 @@ void Win32Window::OnDestroy() {
 }
 
 void Win32Window::UpdateTheme(HWND const window) {
+  DwmSetWindowAttribute(window, kDwmwaBorderColor, &kDwmColorNone,
+                        sizeof(kDwmColorNone));
+
   DWORD light_mode;
   DWORD light_mode_size = sizeof(light_mode);
   LSTATUS result = RegGetValue(HKEY_CURRENT_USER, kGetPreferredBrightnessRegKey,
