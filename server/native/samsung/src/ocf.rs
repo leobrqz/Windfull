@@ -27,6 +27,7 @@ const SAMSUNG_PLAIN_PORT: u16 = 49153;
 const COAP_ACK_TIMEOUT_MIN_MS: u64 = 1_000;
 const COAP_ACK_TIMEOUT_MAX_MS: u64 = 1_500;
 const COAP_MAX_RETRANSMITS: usize = 3;
+const COAP_NOT_FOUND: u8 = (4 << 5) | 4;
 const DTLS_PORTS: &[u16] = &[
     5684, 49152, 49153, 49154, 49155, 49156, 49157, 49158, 49159, 49160,
 ];
@@ -36,6 +37,7 @@ const SAMSUNG_PREFIX: &str = "x.com.samsung.da.";
 pub struct Error {
     pub code: &'static str,
     pub message: String,
+    ocf_response_code: Option<u8>,
 }
 
 impl Error {
@@ -43,6 +45,7 @@ impl Error {
         Self {
             code,
             message: message.into(),
+            ocf_response_code: None,
         }
     }
 }
@@ -330,14 +333,16 @@ impl Appliance {
         self.message_id = self.message_id.max(mid);
         let code = response_code;
         if code >> 5 != 2 {
-            return Err(Error::new(
+            let mut error = Error::new(
                 "ocf_rejected",
                 format!(
                     "The appliance rejected OCF resource {path} (code {}.{:02})",
                     code >> 5,
                     code & 0x1f
                 ),
-            ));
+            );
+            error.ocf_response_code = Some(code);
+            return Err(error);
         }
         ciborium::de::from_reader(payload.as_slice())
             .map(unwrap_single_map_envelope)
@@ -347,6 +352,14 @@ impl Appliance {
     fn get_resource(&mut self, href: &str) -> Result<Value, Error> {
         match self.get(href) {
             Ok(value) => Ok(value),
+            Err(error)
+                if error.code == "ocf_rejected"
+                    && error.ocf_response_code == Some(COAP_NOT_FOUND) =>
+            {
+                // A discovered optional resource may be absent on some Samsung firmware.
+                // A 4.04 cannot be fixed by retrying the same resource with another interface.
+                Err(error)
+            }
             Err(mut last_error) if last_error.code == "ocf_rejected" => {
                 let interfaces = self
                     .resource_catalog
