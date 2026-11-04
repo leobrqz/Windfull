@@ -1,1 +1,1 @@
-{}
+{"main-capability":{"identifier":"main-capability","description":"Permissões estritamente necessárias para o painel WindFull.","local":true,"windows":["main"],"permissions":["core:event:default","core:window:default","core:window:allow-hide"]}}

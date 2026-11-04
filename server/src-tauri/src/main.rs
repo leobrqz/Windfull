@@ -154,6 +154,11 @@ fn show_window(app: &AppHandle) {
 }
 
 fn main() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Could not install the Rustls ring crypto provider");
+    }
     let mut velopack = velopack::VelopackApp::build().set_auto_apply_on_startup(false);
     velopack.run();
     tracing_subscriber::fmt().with_env_filter("info").init();

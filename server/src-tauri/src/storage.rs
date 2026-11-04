@@ -102,30 +102,32 @@ impl Storage {
 
     pub fn read_legacy_secret(&self, key: &str) -> Result<Option<String>, String> {
         let path = legacy_secret_file(&self.support_dir, key);
-        if !path.exists() {
-            return Ok(None);
+        let old_file_error = if path.exists() {
+            match read_aes_secret(&path) {
+                Ok(value) => return Ok(Some(value)),
+                Err(error) => Some(error),
+            }
+        } else {
+            None
+        };
+
+        match read_dpapi_secret(&self.support_dir, key) {
+            Ok(Some(value)) => {
+                // Flutter Secure Storage 11 stores a DPAPI-encrypted JSON map.
+                // Migrate this value into the protected per-key format and keep
+                // the DPAPI source intact as a recoverable copy.
+                self.write_legacy_secret(key, &value)?;
+                Ok(Some(value))
+            }
+            Ok(None) => match old_file_error {
+                Some(error) => Err(error),
+                None => Ok(None),
+            },
+            Err(error) => match old_file_error {
+                Some(old_error) => Err(format!("{old_error}; {error}")),
+                None => Err(error),
+            },
         }
-        let data = fs::read(&path)
-            .map_err(|e| format!("Não foi possível ler a identidade protegida antiga: {e}"))?;
-        let aes_key = legacy_key().ok_or_else(|| "A chave da identidade antiga não está disponível no Gerenciador de Credenciais do Windows.".to_string())?;
-        if data.len() < 28 {
-            return Err("O arquivo de identidade protegida antigo está truncado.".into());
-        }
-        let cipher = Aes128Gcm::new_from_slice(&aes_key)
-            .map_err(|_| "Chave AES antiga inválida.".to_string())?;
-        let mut combined = Vec::with_capacity(data.len() - 12);
-        combined.extend_from_slice(&data[..12]);
-        combined.extend_from_slice(&data[28..]);
-        combined.extend_from_slice(&data[12..28]);
-        let plain = cipher
-            .decrypt(Nonce::from_slice(&data[..12]), combined.as_ref())
-            .map_err(|_| {
-                "Não foi possível validar/descriptografar a identidade antiga.".to_string()
-            })?;
-        let clean = plain.strip_suffix(&[0]).unwrap_or(&plain);
-        String::from_utf8(clean.to_vec())
-            .map(Some)
-            .map_err(|_| "A identidade antiga não contém texto UTF-8 válido.".into())
     }
 
     pub fn write_legacy_secret(&self, key: &str, value: &str) -> Result<(), String> {
@@ -152,6 +154,101 @@ impl Storage {
         bytes.extend_from_slice(&encrypted[..split]);
         atomic_write(&legacy_secret_file(&self.support_dir, key), &bytes)
     }
+}
+
+fn read_aes_secret(path: &Path) -> Result<String, String> {
+    let data = fs::read(path)
+        .map_err(|e| format!("Não foi possível ler o segredo protegido antigo: {e}"))?;
+    let aes_key = legacy_key().ok_or_else(|| {
+        "A chave protegida antiga não está disponível no Gerenciador de Credenciais do Windows."
+            .to_string()
+    })?;
+    if data.len() < 28 {
+        return Err("O arquivo protegido antigo está truncado.".into());
+    }
+    let cipher = Aes128Gcm::new_from_slice(&aes_key)
+        .map_err(|_| "Chave AES antiga inválida.".to_string())?;
+    let mut combined = Vec::with_capacity(data.len() - 12);
+    combined.extend_from_slice(&data[..12]);
+    combined.extend_from_slice(&data[28..]);
+    combined.extend_from_slice(&data[12..28]);
+    let mut plain = cipher
+        .decrypt(Nonce::from_slice(&data[..12]), combined.as_ref())
+        .map_err(|_| "Não foi possível validar o arquivo protegido antigo.".to_string())?;
+    let clean = plain.strip_suffix(&[0]).unwrap_or(&plain).to_vec();
+    plain.fill(0);
+    String::from_utf8(clean).map_err(|_| "O segredo antigo não contém texto UTF-8 válido.".into())
+}
+
+#[cfg(windows)]
+fn read_dpapi_secret(support: &Path, key: &str) -> Result<Option<String>, String> {
+    use std::ptr;
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB},
+    };
+
+    const MAX_STORAGE_BYTES: usize = 16 * 1024 * 1024;
+    let path = support.join("flutter_secure_storage.dat");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let encrypted = fs::read(&path)
+        .map_err(|e| format!("Não foi possível ler o armazenamento protegido antigo: {e}"))?;
+    if encrypted.is_empty() || encrypted.len() > MAX_STORAGE_BYTES {
+        return Err(
+            "O armazenamento protegido antigo está vazio ou excede o limite esperado.".into(),
+        );
+    }
+    let input_size = u32::try_from(encrypted.len())
+        .map_err(|_| "O armazenamento protegido antigo é grande demais.".to_string())?;
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: input_size,
+        pbData: encrypted.as_ptr() as *mut u8,
+    };
+    let mut output: CRYPT_INTEGER_BLOB = unsafe { std::mem::zeroed() };
+    let decrypted = unsafe {
+        CryptUnprotectData(
+            &input,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
+            ptr::null(),
+            0,
+            &mut output,
+        )
+    };
+    if decrypted == 0 {
+        return Err(format!(
+            "O Windows não conseguiu abrir o armazenamento protegido antigo (DPAPI): {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if output.pbData.is_null() || output.cbData == 0 {
+        if !output.pbData.is_null() {
+            unsafe { LocalFree(output.pbData as _) };
+        }
+        return Err("O armazenamento protegido antigo não contém dados.".into());
+    }
+    let mut plain =
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe { LocalFree(output.pbData as _) };
+    let decoded = serde_json::from_slice::<serde_json::Value>(&plain);
+    plain.fill(0);
+    let decoded =
+        decoded.map_err(|e| format!("O índice DPAPI antigo contém JSON inválido: {e}"))?;
+    let values = decoded
+        .as_object()
+        .ok_or_else(|| "O índice DPAPI antigo não contém um mapa de segredos.".to_string())?;
+    Ok(values
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned))
+}
+
+#[cfg(not(windows))]
+fn read_dpapi_secret(_support: &Path, _key: &str) -> Result<Option<String>, String> {
+    Ok(None)
 }
 
 fn legacy_secret_file(support: &Path, key: &str) -> PathBuf {
