@@ -56,6 +56,34 @@ function Get-ZipEntryText([IO.Compression.ZipArchive]$Archive, [string]$Name) {
     try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
 }
 
+function Export-ZipEntry([IO.Compression.ZipArchive]$Archive, [string]$Name, [string]$Destination) {
+    $entry = $Archive.GetEntry($Name)
+    if (-not $entry) { throw "Missing archive entry: $Name" }
+    $input = $entry.Open()
+    $output = [IO.File]::Open($Destination, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try { $input.CopyTo($output) } finally { $input.Dispose(); $output.Dispose() }
+}
+
+function Get-WindowsSubsystem([string]$Path) {
+    $stream = [IO.File]::OpenRead($Path)
+    $reader = $null
+    try {
+        if ($stream.Length -lt 0x40) { throw "Invalid Windows executable: $Path" }
+        $reader = [IO.BinaryReader]::new($stream)
+        $stream.Position = 0x3c
+        $peOffset = $reader.ReadInt32()
+        $optionalHeaderOffset = $peOffset + 4 + 20
+        if ($peOffset -lt 0 -or $optionalHeaderOffset + 70 -gt $stream.Length) {
+            throw "Invalid PE header: $Path"
+        }
+        $stream.Position = $optionalHeaderOffset + 68
+        return $reader.ReadUInt16()
+    }
+    finally {
+        if ($reader) { $reader.Dispose() } else { $stream.Dispose() }
+    }
+}
+
 $appVersion = Read-Version (Join-Path $root 'app\pubspec.yaml')
 $serverVersion = Read-Cargo-Version (Join-Path $root 'server\src-tauri\Cargo.toml')
 if ($appVersion.Name -cne $serverVersion) { throw 'Android release version and Tauri host version must match.' }
@@ -169,12 +197,9 @@ try {
     if (-not $packageZip.GetEntry('lib/app/LICENSE.velopack')) { throw 'Full Windows update package is missing the Velopack MIT license notice.' }
     $launcher = @($portableZip.Entries | Where-Object { $_.FullName -match '^[^/\\]+\.exe$' -and $_.Name -ne 'Update.exe' })
     if ($launcher.Count -ne 1) { throw 'Managed portable ZIP must contain exactly one root application launcher.' }
-    $binaryEntry = $portableZip.GetEntry('current/windfull_server.exe')
     $temporaryExe = [IO.Path]::GetTempFileName()
     try {
-        $input = $binaryEntry.Open()
-        $outputStream = [IO.File]::Open($temporaryExe, [IO.FileMode]::Create)
-        try { $input.CopyTo($outputStream) } finally { $input.Dispose(); $outputStream.Dispose() }
+        Export-ZipEntry $portableZip 'current/windfull_server.exe' $temporaryExe
         $binaryVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($temporaryExe)
         $hostParts = $serverVersion.Split('.') | ForEach-Object { [int]$_ }
         if ($binaryVersion.FileMajorPart -ne $hostParts[0] -or
@@ -182,8 +207,29 @@ try {
             $binaryVersion.FileBuildPart -ne $hostParts[2]) {
             throw 'Tauri Windows executable version does not match server/src-tauri/Cargo.toml.'
         }
+        if ((Get-WindowsSubsystem $temporaryExe) -ne 2) {
+            throw 'Tauri host must use the Windows GUI subsystem so launching it does not open a console window.'
+        }
     }
     finally { Remove-Item -LiteralPath $temporaryExe -Force }
+
+    $temporarySidecar = [IO.Path]::GetTempFileName()
+    try {
+        Export-ZipEntry $portableZip 'current/windfull-samsung-ocf.exe' $temporarySidecar
+        if ((Get-WindowsSubsystem $temporarySidecar) -ne 2) {
+            throw 'Samsung OCF sidecar must use the Windows GUI subsystem so it does not open a console window.'
+        }
+    }
+    finally { Remove-Item -LiteralPath $temporarySidecar -Force }
+
+    $temporaryLauncher = [IO.Path]::GetTempFileName()
+    try {
+        Export-ZipEntry $portableZip $launcher[0].FullName $temporaryLauncher
+        if ((Get-WindowsSubsystem $temporaryLauncher) -ne 2) {
+            throw 'WindFull launcher must use the Windows GUI subsystem so it does not open a console window.'
+        }
+    }
+    finally { Remove-Item -LiteralPath $temporaryLauncher -Force }
 }
 finally {
     $portableZip.Dispose()
