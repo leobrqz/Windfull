@@ -110,7 +110,6 @@ export default function App() {
   const selectSettingsTab = (next: Tab) => {
     setTab(next);
     void command("log_ui_event", { event: `settings.tab.${next}` }).catch(() => undefined);
-    void getCurrentWindow().setFocus().catch(e => setActionError(String(e)));
   };
   const modes = appliance?.supportedModes ?? [];
   const fanSpeeds = appliance?.fanSpeeds ?? [];
