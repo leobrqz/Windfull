@@ -449,6 +449,14 @@ impl Appliance {
                 if error.ocf_response_code.is_some_and(|code| code >> 5 == 4) {
                     self.unavailable_resources
                         .insert(href.to_string(), Instant::now() + Duration::from_secs(300));
+                } else if is_optional_hass_resource(href)
+                    && matches!(error.code, "timeout" | "network_error")
+                {
+                    // Home Assistant compatibility endpoints are optional and may be
+                    // advertised even when a Samsung firmware does not serve them.
+                    // Keep them from repeatedly delaying otherwise healthy state reads.
+                    self.unavailable_resources
+                        .insert(href.to_string(), Instant::now() + Duration::from_secs(5));
                 }
                 if self.fast_requests && matches!(error.code, "timeout" | "network_error") {
                     self.poll_backoff
@@ -488,6 +496,12 @@ impl Appliance {
                     let path = format!("{href}?if={interface}");
                     match self.get(&path) {
                         Ok(value) => return Ok(value),
+                        Err(error) if error.ocf_response_code == Some(COAP_NOT_FOUND) => {
+                            // Not-found is independent of the requested OCF
+                            // interface. Do not retry an absent resource through
+                            // other interfaces and turn its 4.04 into a timeout.
+                            return Err(error);
+                        }
                         Err(error) => {
                             let message = format!(
                                 "{}; interface {interface}: {}",
@@ -839,7 +853,10 @@ impl Appliance {
                     }
                     collect.insert(href.to_string(), json_value);
                 }
-                Err(error) if error.code == "timeout" || error.code == "network_error" => {
+                Err(error)
+                    if !is_optional_hass_resource(href)
+                        && (error.code == "timeout" || error.code == "network_error") =>
+                {
                     return Err(error)
                 }
                 Err(error) => {
@@ -870,6 +887,10 @@ impl Appliance {
                 self.resource_catalog
                     .iter()
                     .any(|link| link.href == *href && link.observable)
+                    && !self
+                        .unavailable_resources
+                        .get(href)
+                        .is_some_and(|retry_at| *retry_at > Instant::now())
             })
             .collect::<Vec<_>>();
         for (slot, href) in targets.into_iter().enumerate() {
@@ -1127,7 +1148,10 @@ impl Appliance {
                 Ok(value) => {
                     resources.insert(href, cbor_to_json(&value));
                 }
-                Err(error) if error.code == "timeout" || error.code == "network_error" => {
+                Err(error)
+                    if !is_optional_hass_resource(&href)
+                        && (error.code == "timeout" || error.code == "network_error") =>
+                {
                     return Err(error)
                 }
                 Err(error) => {
@@ -2009,6 +2033,12 @@ fn parse_resource_catalog(value: &Value) -> Vec<ResourceLink> {
             })
         })
         .collect()
+}
+
+fn is_optional_hass_resource(href: &str) -> bool {
+    href.trim_start_matches('/')
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("hass/"))
 }
 
 fn resource_poll_interval(href: &str) -> Duration {
